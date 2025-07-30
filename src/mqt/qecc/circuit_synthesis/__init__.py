@@ -13,7 +13,8 @@ from .cat_states import CatStatePreparationExperiment, cat_state_balanced_tree, 
 from .circuit_utils import qiskit_to_stim_circuit
 from .circuits import CNOTCircuit
 from .encoding import depth_optimal_encoding_circuit, gate_optimal_encoding_circuit, heuristic_encoding_circuit
-from .simulation import LutDecoder, NoisyNDFTStatePrepSimulator
+from .noise import CircuitLevelNoiseIdlingParallel, CircuitLevelNoiseIdlingSequential
+from .simulation import LutDecoder, SteaneNDFTStatePrepSimulator, VerificationNDFTStatePrepSimulator
 from .state_prep import (
     FaultyStatePrepCircuit,
     depth_optimal_prep_circuit,
@@ -30,11 +31,14 @@ from .state_prep_det import DeterministicVerification, DeterministicVerification
 __all__ = [
     "CNOTCircuit",
     "CatStatePreparationExperiment",
+    "CircuitLevelNoiseIdlingParallel",
+    "CircuitLevelNoiseIdlingSequential",
     "DeterministicVerification",
     "DeterministicVerificationHelper",
     "FaultyStatePrepCircuit",
     "LutDecoder",
-    "NoisyNDFTStatePrepSimulator",
+    "SteaneNDFTStatePrepSimulator",
+    "VerificationNDFTStatePrepSimulator",
     "cat_state_balanced_tree",
     "cat_state_line",
     "depth_optimal_encoding_circuit",
