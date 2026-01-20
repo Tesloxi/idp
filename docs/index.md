@@ -32,6 +32,7 @@ CatStates
 CodeSwitching
 Encoders
 AnalogInfo
+cococo
 references
 CHANGELOG
 UPGRADING
