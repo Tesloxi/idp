@@ -16,7 +16,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
     import numpy.typing as npt
 
-    from .circuits import CNOTCircuit
+    from .non_css_circuits import Circuit
 
 class FaultSet:
     """Represents a collection of single faults""" 
@@ -93,7 +93,7 @@ class FaultSet:
         return fault_set
     
     @classmethod
-    def from_cnot_circuit(cls, circ: CNOTCircuit, reduce: bool = False) -> FaultSet:
+    def from_cnot_circuit(cls, circ: Circuit, reduce: bool = False) -> FaultSet:
         """Generate a FaultSet from a CNOT circuit
         
         Args:
