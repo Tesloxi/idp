@@ -29,7 +29,28 @@ class Gate:
                     qubits[0] is the control and qubits[1] the target
         """
         self.name = name
+        if len(qubits) > 2:
+            msg = "Gates must have at most two qubits."
+            raise ValueError(msg)
         self.qubits = qubits
+
+    def num_qubits(self) -> int:
+        """Return the number of qubits affected by the gate."""
+        return len(self.qubits)
+    
+    def to_array(self) -> np.ndarray:
+        """Return the gate as an array"""
+        if self.name == "CNOT":
+            return np.array([[1, 0, 0, 0],
+                             [0, 1, 0, 0],
+                             [0, 0, 0, 1],
+                             [0, 0, 1, 0]])
+        elif self.name == "H":
+            return np.array([1, 1],
+                            [1, -1])/np.sqrt(2)
+        elif self.name == "S":
+            return np.array([1, 0],
+                            [0, 1j])
 
 class Circuit:
     """Represents a restricted quantum circuit composed of CNOT, H and S gates"""
