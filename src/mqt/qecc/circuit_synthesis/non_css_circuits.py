@@ -46,11 +46,11 @@ class Gate:
                              [0, 0, 0, 1],
                              [0, 0, 1, 0]])
         elif self.name == "H":
-            return np.array([1, 1],
-                            [1, -1])/np.sqrt(2)
+            return np.array([[1, 1],
+                            [1, -1]])/np.sqrt(2)
         elif self.name == "S":
-            return np.array([1, 0],
-                            [0, 1j])
+            return np.array([[1, 0],
+                            [0, 1.0j]])
 
 class Circuit:
     """Represents a restricted quantum circuit composed of CNOT, H and S gates"""

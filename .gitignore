@@ -176,3 +176,4 @@ node_modules/
 wheelhouse/
 
 pytest.ini
+src/mqt/qecc/circuit_synthesis/test.py
