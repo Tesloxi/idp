@@ -113,7 +113,7 @@ class FaultSet:
         if array.ndim != 2:
             msg = "Input array must be 2-dimensional."
             raise ValueError(msg)
-        fault_set = cls(array.shape[1])
+        fault_set = cls(array.shape[1]//2)
         fault_set.faults = np.unique(array, axis=0)
         return fault_set
     
@@ -205,8 +205,36 @@ class FaultSet:
 
             gate = reversed_gates[i]
 
-            # Consider only two-qubit gates as single-qubit gates do not change the fault set
-            if gate.num_qubits() == 2:
+            # Single-qubit gate
+            if gate.num_qubits() == 1:
+                qubit_idx = gate.qubits[0]
+
+                faults = qubit_faults[qubit_idx][-1]
+
+                qubit_faults[qubit_idx].append([])
+
+                # For each possible fault after gate n, UxE add the fault E'
+                # such that E'xU=UxE 
+                for f in [fault for fault in faults if fault[qubit_idx] == 1 or fault[qubit_idx+num_qubits] == 1]: # Only consider faults that affect the qubit
+                    f_name = cls.convert_2n_array_to_name(f, qubit_idx) # Now f is "X", "Y" or "Z" 
+                    E_prime = cls.reverse_propagate_single_qubit_error(gate, f_name) # E_prime is also "X", "Y" or "Z"
+                    new_fault = f
+                    
+                    # Remove the error after the gate
+                    new_fault[qubit_idx] -= f[qubit_idx]
+                    new_fault[qubit_idx+num_qubits] -= f[qubit_idx+num_qubits]
+
+                    # Add the computed error E' before the gate
+                    if E_prime == "X":
+                        new_fault[qubit_idx] = 1
+                    elif E_prime == "Y":
+                        new_fault[qubit_idx] = 1
+                        new_fault[qubit_idx+num_qubits] = 1
+                    elif E_prime == "Z":
+                        new_fault[qubit_idx+num_qubits] = 1
+                    qubit_faults[qubit_idx][-1].append(new_fault)
+                
+            else:
                 ctrl, trgt = gate.qubits
 
                 faults_ctrl = qubit_faults[ctrl][-1]
@@ -221,32 +249,20 @@ class FaultSet:
                     for f2 in faults_trgt:
                         new_fault = f1 ^ f2
 
-                        # If both qubits are affected by a fault before the gate
-                        if (new_fault[ctrl] == 1 or new_fault[ctrl+num_qubits] == 1) and (new_fault[trgt] == 1 or new_fault[trgt+-num_qubits] == 1):
-                            # Then for the new fault to make sense it has to be that both qubits have been 
-                            # affected by a two-qubit gate before (not necessarly the same) because otherwise,
-                            # a single error in the circuit could not have lead to this situation
+                        # # If both qubits are affected by a fault before the gate
+                        # if (new_fault[ctrl] == 1 or new_fault[ctrl+num_qubits] == 1) and (new_fault[trgt] == 1 or new_fault[trgt+-num_qubits] == 1):
+                        #     # Then for the new fault to make sense it has to be that both qubits have been 
+                        #     # affected by a two-qubit gate before (not necessarly the same) because otherwise,
+                        #     # a single error in the circuit could not have lead to this situation
 
-                            # Check that both qubit have been affected
-                            ctrl_ok = False
-                            trgt_ok = False
-                            for j in range(i+1, len(reversed_gates)):
-                                if ctrl in reversed_gates[j].qubits:
-                                    ctrl_ok = True
-                                if trgt in reversed_gates[j].qubits:
-                                    trgt_ok = True
-                                if ctrl_ok and trgt_ok:
-                                    break
-
-                            # If both qubits have been affected before, we can add the fault
-                            if ctrl_ok and trgt_ok:
-                                qubit_faults[ctrl][-1].append(new_fault)
-                                qubit_faults[trgt][-1].append(new_fault)
-                            
-                        else:
-                            # only one of the considered qubits are affected
-                            qubit_faults[ctrl][-1].append(new_fault)
-                            qubit_faults[trgt][-1].append(new_fault)
+                        #     # TODO: check that both qubit have been affected
+                        #     pass
+                        # else:
+                        #     # only one of the considered qubits are affected
+                        #     qubit_faults[ctrl][-1].append(new_fault)
+                        #     qubit_faults[trgt][-1].append(new_fault)
+                        qubit_faults[ctrl][-1].append(new_fault)
+                        qubit_faults[trgt][-1].append(new_fault)
                     
                     
         # Create the fault set
@@ -258,3 +274,19 @@ class FaultSet:
         # TODO: remove equivalents w.r.t. stabilizers
 
 
+    def make_readable(self) -> list[str]:
+        """Return a human-readable representation of the faults in the fault set."""
+        readable_faults = []
+        for fault in self.faults:
+            fault_str = ""
+            for i in range(self.num_qubits):
+                if fault[i] == 1 and fault[i+self.num_qubits] == 1:
+                    fault_str += f"Y{i} "
+                elif fault[i] == 1 and fault[i+self.num_qubits] == 0:
+                    fault_str += f"X{i} "
+                elif fault[i] == 0 and fault[i+self.num_qubits] == 1:
+                    fault_str += f"Z{i} "
+                else:
+                    fault_str += f"I{i} "
+            readable_faults.append(fault_str.strip())
+        return readable_faults
