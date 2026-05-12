@@ -23,7 +23,7 @@ class Fault:
 
     def __init__(self, name: str):
         """Initialize the Fault object"""
-        assert name.capitalize() in {"X", "Y", "Z"}, "Fault must be either 'X', 'Y' or 'Z'."
+        assert name.upper() in {"X", "Y", "Z"}, "Fault must be either 'X', 'Y' or 'Z'."
         self.name = name.upper()
 
     def to_array(self) -> np.ndarray:
@@ -135,17 +135,18 @@ class FaultSet:
             return "X"
         elif error_array[qubit_idx] == 0 and error_array[qubit_idx+n]== 1:
             return "Z"
-        else:
-            return "I"
         
 
     @classmethod
-    def reverse_propagate_single_qubit_error(cls, gate: Gate, fault_name: str) -> np.ndarray:
+    def reverse_propagate_single_qubit_error(cls, gate: Gate, fault_name: str) -> str:
         """Finds E' such that E'xU==UxE
         
         Args:
             gate: The single-qubit gate propagating the error
             fault_name: The resulting error after the single-qubit gate, either X, Y or Z    
+        
+        Returns:
+            The name of the error before the gate, either X, Y or Z.
         """
         if gate.num_qubits() > 1:
             msg = "Gate must be a single-qubit gate."
@@ -158,14 +159,14 @@ class FaultSet:
                 return elt
     
     @classmethod
-    def from_cnot_circuit(cls, circ: Circuit, reduce: bool = False) -> FaultSet:
-        """Generate a FaultSet from a CNOT circuit
+    def from_circuit(cls, circ: Circuit, reduce: bool = False) -> FaultSet:
+        """Generate a FaultSet from a circuit
         
         Args:
             circ: The circuit to generate faults from.
             reduce: Reduce faults by stabilizers induced by the circuit.
 
-            Returns:
+        Returns:
             A FaultSet containing the faults generated from the circuit.
         """ 
 
@@ -182,53 +183,30 @@ class FaultSet:
         # Initialize with single faults at the end of the circuit
         for i in range(num_qubits):
             # Add single X error
-            x_error = np.zeros((0, 2*num_qubits), dtype=np.int8)
-            x_error[0] = 1
+            x_error = np.zeros(2*num_qubits, dtype=np.int8)
+            x_error[i] = 1
             qubit_faults[i][0].append(x_error)
             
             # Add single Z error
-            z_error = np.zeros((0, 2*num_qubits), dtype=np.int8)
-            z_error[num_qubits] = 1
+            z_error = np.zeros(2*num_qubits, dtype=np.int8)
+            z_error[i+num_qubits] = 1
             qubit_faults[i][0].append(z_error)
             
             # Add single Y error
-            y_error = np.zeros((0, 2*num_qubits), dtype=np.int8)
-            y_error[0] = 1
-            y_error[num_qubits] = 1
+            y_error = np.zeros(2*num_qubits, dtype=np.int8)
+            y_error[i] = 1
+            y_error[i+num_qubits] = 1
             qubit_faults[i][0].append(y_error)
 
+
         # Iterate through the circuit in reverse and combine faults
-        reversed_gates = reversed(circ.gates)
+        reversed_gates = circ.gates[::-1]
         for i in range(len(reversed_gates)):
+
             gate = reversed_gates[i]
 
-            # Single-qubit gate
-            if gate.num_qubits() == 1:
-                qubit_idx = gate.qubits[0]
-
-                faults = qubit_faults[qubit_idx][-1]
-
-                qubit_faults[qubit_idx].append([])
-
-                # For each possible fault after gate n, UxE add the fault E'
-                # such that E'xU=UxE 
-                for f in faults:
-                    f_name = cls.convert_2n_array_to_name(f, qubit_idx) # Now f is "X", "Y" or "Z" 
-                    E_prime = cls.reverse_propagate_single_qubit_error(gate, f_name) # E_prime is also "X", "Y" or "Z"
-                    new_fault = f
-                    # Remove the error after the gate
-                    new_fault[qubit_idx] -= f[qubit_idx]
-                    new_fault[qubit_idx+num_qubits] -= f[qubit_idx+num_qubits]
-                    # Add the computed error E' before the gate
-                    if E_prime == "X":
-                        new_fault[qubit_idx] = 1
-                    elif E_prime == "Y":
-                        new_fault[qubit_idx] = 1
-                        new_fault[qubit_idx+num_qubits] = 1
-                    elif E_prime == "Z":
-                        new_fault[qubit_idx+num_qubits] = 1
-                    qubit_faults[qubit_idx][-1].append(new_fault)
-            else:
+            # Consider only two-qubit gates as single-qubit gates do not change the fault set
+            if gate.num_qubits() == 2:
                 ctrl, trgt = gate.qubits
 
                 faults_ctrl = qubit_faults[ctrl][-1]
@@ -242,11 +220,35 @@ class FaultSet:
                 for f1 in faults_ctrl:
                     for f2 in faults_trgt:
                         new_fault = f1 ^ f2
-                        # TODO: add the new fault only if it is part of the propagated errors
-                        qubit_faults[ctrl][-1].append(new_fault)
-                        qubit_faults[trgt][-1].append(new_fault)
-                    
 
+                        # If both qubits are affected by a fault before the gate
+                        if (new_fault[ctrl] == 1 or new_fault[ctrl+num_qubits] == 1) and (new_fault[trgt] == 1 or new_fault[trgt+-num_qubits] == 1):
+                            # Then for the new fault to make sense it has to be that both qubits have been 
+                            # affected by a two-qubit gate before (not necessarly the same) because otherwise,
+                            # a single error in the circuit could not have lead to this situation
+
+                            # Check that both qubit have been affected
+                            ctrl_ok = False
+                            trgt_ok = False
+                            for j in range(i+1, len(reversed_gates)):
+                                if ctrl in reversed_gates[j].qubits:
+                                    ctrl_ok = True
+                                if trgt in reversed_gates[j].qubits:
+                                    trgt_ok = True
+                                if ctrl_ok and trgt_ok:
+                                    break
+
+                            # If both qubits have been affected before, we can add the fault
+                            if ctrl_ok and trgt_ok:
+                                qubit_faults[ctrl][-1].append(new_fault)
+                                qubit_faults[trgt][-1].append(new_fault)
+                            
+                        else:
+                            # only one of the considered qubits are affected
+                            qubit_faults[ctrl][-1].append(new_fault)
+                            qubit_faults[trgt][-1].append(new_fault)
+                    
+                    
         # Create the fault set
         fs = cls.from_fault_array(np.array([fault for faults in qubit_faults for gate_faults in faults for fault in gate_faults], dtype=np.int8)) # Hopefully flattens the arrray qubit_faults
         if not reduce:

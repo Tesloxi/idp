@@ -86,7 +86,6 @@ class Circuit:
         
         The number of qubits is determined by the highest index of any gate.
         """
-        indices = [q for gate in self.gates for qubits in gate for q in qubits] 
+        indices = [q for gate in self.gates for q in gate.qubits] 
 
-        # TODO: check that this function returns the correct number of qubits
         return max(indices, default=0) + 1
