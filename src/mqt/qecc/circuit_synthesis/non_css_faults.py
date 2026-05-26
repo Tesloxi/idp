@@ -138,26 +138,87 @@ class FaultSet:
         
 
     @classmethod
-    def reverse_propagate_single_qubit_error(cls, gate: Gate, fault_name: str) -> str:
-        """Finds E' such that E'xU==UxE
-        
+    def forward_propagate(cls, gate: Gate, error_array: np.ndarray) -> np.ndarray:
+        """Forward propagate an error through a gate.
+
         Args:
-            gate: The single-qubit gate propagating the error
-            fault_name: The resulting error after the single-qubit gate, either X, Y or Z    
-        
+            gate: The gate through which to propagate the error.
+            error_array: The array of size 2n describing the error.
+
         Returns:
-            The name of the error before the gate, either X, Y or Z.
+            A new array of size 2n describing the propagated error.
         """
-        if gate.num_qubits() > 1:
-            msg = "Gate must be a single-qubit gate."
-            raise ValueError(msg)
-        U = gate.to_array()
-        E = Fault.from_name(fault_name).to_array()
-        for elt in {"X", "Y", "Z"}:
-            E_prime = Fault.from_name(elt).to_array()
-            if np.array_equal(E_prime @ U, U @ E) or np.array_equal(-E_prime @ U, U @ E):
-                return elt
     
+        # One-qubit gate
+        if gate.num_qubits() == 1:
+            qubit_idx = gate.qubits[0]
+            error_name = cls.convert_2n_array_to_name(error_array, qubit_idx)
+            if error_name == "I":
+                return error_array
+            
+            gate_matrix = gate.to_array()
+            error_matrix = Fault.from_name(error_name).to_array()
+            propagated_error_matrix = gate_matrix.conj().T @ error_matrix @ gate_matrix # E*U=U*E' => E'=U_dag*E*U
+
+            propagated_error_array = np.zeros_like(error_array)
+            # Convert the propagated error matrix back to an array
+            if np.allclose(propagated_error_matrix, Fault.from_name("X").to_array()):
+                propagated_error_array[qubit_idx] = 1
+            elif np.allclose(propagated_error_matrix, Fault.from_name("Z").to_array()):
+                propagated_error_array[qubit_idx+len(error_array)//2] = 1
+            elif np.allclose(propagated_error_matrix, Fault.from_name("Y").to_array()):
+                propagated_error_array[qubit_idx] = 1
+                propagated_error_array[qubit_idx+len(error_array)//2] = 1
+
+            return propagated_error_array
+        
+        # Two-qubits gate
+        elif gate.num_qubits() == 2:
+            ctrl, trgt = gate.qubits
+            ctrl_error_name = cls.convert_2n_array_to_name(error_array, ctrl)
+            trgt_error_name = cls.convert_2n_array_to_name(error_array, trgt)
+
+            if ctrl_error_name=="I" and trgt_error_name=="I":
+                return error_array
+
+            gate_matrix = gate.to_array()
+            error_matrix_ctrl = Fault.from_name(ctrl_error_name).to_array()
+            error_matrix_trgt = Fault.from_name(trgt_error_name).to_array()
+            error_matrix = np.kron(error_matrix_ctrl, error_matrix_trgt)
+
+            propagated_error_matrix = gate_matrix.conj().T @ error_matrix @ gate_matrix
+
+            propagated_error_name = []
+            # Convert the propagated error matrix back to an array
+            for i in ["I", "X", "Y", "Z"]:
+                for j in ["I", "X", "Y", "Z"]:
+                    matrix_i = Fault.from_name(i).to_array()
+                    matrix_j = Fault.from_name(j).to_array()
+
+                    if np.allclose(propagated_error_matrix, np.kron(matrix_i, matrix_j)):
+                        propagated_error_name.append(i)
+                        propagated_error_name.append(j)
+                        break
+
+                if len(propagated_error_name) > 0:
+                    break
+
+            
+            propagated_error_array = np.zeros_like(error_array)
+            for i in range(2):
+                if propagated_error_name[i] == "X":
+                    propagated_error_array[gate.qubits[i]] = 1
+                elif propagated_error_name[i] == "Z":
+                    propagated_error_array[gate.qubits[i]+len(error_array)//2] = 1
+                elif propagated_error_name[i] == "Y":
+                    propagated_error_array[gate.qubits[i]] = 1
+                    propagated_error_array[gate.qubits[i]+len(error_array)//2] = 1
+
+            return propagated_error_array
+
+
+
+
     @classmethod
     def from_circuit(cls, circ: Circuit, reduce: bool = False) -> FaultSet:
         """Generate a FaultSet from a circuit
@@ -207,22 +268,21 @@ class FaultSet:
 
             # Single-qubit gate
             if gate.num_qubits() == 1:
-                qubit_idx = gate.qubits[0]
+                qubit_idx = gate.qubits[0] # Qubit affected by the gate
 
-                faults = qubit_faults[qubit_idx][-1]
+                faults = qubit_faults[qubit_idx][-1] # Faults affecting the qubit after the gate (computed at the previous iteration)
 
-                qubit_faults[qubit_idx].append([])
+                qubit_faults[qubit_idx].append([]) # Add a new array for the current gate
 
-                # For each possible fault after gate n, UxE add the fault E'
-                # such that E'xU=UxE 
+                # For each possible fault E after the current gate U, add the fault E' such that E'xU=UxE 
                 for f in [fault for fault in faults if fault[qubit_idx] == 1 or fault[qubit_idx+num_qubits] == 1]: # Only consider faults that affect the qubit
                     f_name = cls.convert_2n_array_to_name(f, qubit_idx) # Now f is "X", "Y" or "Z" 
                     E_prime = cls.reverse_propagate_single_qubit_error(gate, f_name) # E_prime is also "X", "Y" or "Z"
                     new_fault = f
                     
                     # Remove the error after the gate
-                    new_fault[qubit_idx] -= f[qubit_idx]
-                    new_fault[qubit_idx+num_qubits] -= f[qubit_idx+num_qubits]
+                    new_fault[qubit_idx] = 0
+                    new_fault[qubit_idx+num_qubits] = 0
 
                     # Add the computed error E' before the gate
                     if E_prime == "X":
@@ -232,6 +292,7 @@ class FaultSet:
                         new_fault[qubit_idx+num_qubits] = 1
                     elif E_prime == "Z":
                         new_fault[qubit_idx+num_qubits] = 1
+
                     qubit_faults[qubit_idx][-1].append(new_fault)
                 
             else:

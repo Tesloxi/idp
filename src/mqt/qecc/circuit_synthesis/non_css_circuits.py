@@ -17,14 +17,13 @@ if TYPE_CHECKING:  # pragma: no cover
     import numpy.typing as npt
 
 class Gate:
-    """Represents a single or two-qubit gate.
-    For now only CNOT, H and S are represented"""
+    """Represents a single or two-qubit gate."""
 
     def __init__(self, name:str, qubits: list[int]) -> None:
         """Initialize a gate.
         
         Args:
-            str: name of the gate "CNOT", "H" or "S"
+            str: name of the gate "CNOT", "CZ", "H", "S" or "SDAG"
             qubits: The list of affected qubits. For two qubit-gates, 
                     qubits[0] is the control and qubits[1] the target
         """
@@ -45,12 +44,20 @@ class Gate:
                              [0, 1, 0, 0],
                              [0, 0, 0, 1],
                              [0, 0, 1, 0]])
+        elif self.name == "CZ":
+            return np.array([[1, 0, 0, 0],
+                             [0, 1, 0, 0],
+                             [0, 0, 1, 0],
+                             [0, 0, 0, -1]])
         elif self.name == "H":
             return np.array([[1, 1],
                             [1, -1]])/np.sqrt(2)
         elif self.name == "S":
             return np.array([[1, 0],
                             [0, 1.0j]])
+        elif self.name == "SDAG":
+            return np.array([[1, 0],
+                            [0, -1.0j]])
 
 class Circuit:
     """Represents a restricted quantum circuit composed of CNOT, H and S gates"""
