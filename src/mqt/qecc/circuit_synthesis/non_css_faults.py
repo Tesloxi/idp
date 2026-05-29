@@ -23,7 +23,7 @@ class Fault:
 
     def __init__(self, name: str):
         """Initialize the Fault object"""
-        assert name.upper() in {"X", "Y", "Z"}, "Fault must be either 'X', 'Y' or 'Z'."
+        assert name.upper() in {"I", "X", "Y", "Z"}, "Fault must be either 'I', 'X', 'Y' or 'Z'."
         self.name = name.upper()
 
     def to_array(self) -> np.ndarray:
@@ -37,6 +37,9 @@ class Fault:
         elif self.name == "Z":
             return np.array([[1, 0],
                             [0, -1]])
+        elif self.name == "I":
+            return np.array([[1, 0],
+                            [0, 1]])
         
     @classmethod
     def from_name(cls, name: str) -> Fault:
@@ -126,7 +129,7 @@ class FaultSet:
             qubit_idx: The index of the qubit of which we want to know the fault.
 
         Returns:
-            A string in {"X", "Y", "Z"}.
+            A string in {"I", "X", "Y", "Z"}.
         """
         n = len(error_array)//2
         if error_array[qubit_idx] == 1 and error_array[qubit_idx+n] == 1:
@@ -135,6 +138,8 @@ class FaultSet:
             return "X"
         elif error_array[qubit_idx] == 0 and error_array[qubit_idx+n]== 1:
             return "Z"
+        else:
+            return "I"
         
 
     @classmethod
@@ -162,11 +167,14 @@ class FaultSet:
 
             propagated_error_array = np.zeros_like(error_array)
             # Convert the propagated error matrix back to an array
-            if np.allclose(propagated_error_matrix, Fault.from_name("X").to_array()):
+            if np.allclose(propagated_error_matrix, Fault.from_name("X").to_array()) or \
+                np.allclose(propagated_error_matrix, -1*Fault.from_name("X").to_array()):
                 propagated_error_array[qubit_idx] = 1
-            elif np.allclose(propagated_error_matrix, Fault.from_name("Z").to_array()):
+            elif np.allclose(propagated_error_matrix, Fault.from_name("Z").to_array()) or \
+                np.allclose(propagated_error_matrix, -1*Fault.from_name("Z").to_array()):
                 propagated_error_array[qubit_idx+len(error_array)//2] = 1
-            elif np.allclose(propagated_error_matrix, Fault.from_name("Y").to_array()):
+            elif np.allclose(propagated_error_matrix, Fault.from_name("Y").to_array()) or \
+                np.allclose(propagated_error_matrix, -1*Fault.from_name("Y").to_array()):
                 propagated_error_array[qubit_idx] = 1
                 propagated_error_array[qubit_idx+len(error_array)//2] = 1
 
@@ -216,7 +224,27 @@ class FaultSet:
 
             return propagated_error_array
 
-
+    @classmethod
+    def find_next_spot(cls, current_spot: int, max_spot: int, qubit_idx: int, gates: list[Gate]) -> int:
+        """Finds the next propagation spot on the current qubit.
+        
+        Args:
+            current_spot: the gate index associated with the current spot.
+            max_spot: the index associated with the last spot after the last gate affecting this qubit.
+            qubit_idx: the index of the qubit we are looking at.
+            gates: list of the circuit gates.
+            
+        Returns:
+            The index of the next spot.
+        """
+        next_spot = current_spot+1
+        for j in range(next_spot, max_spot+1): # Trying to find the next gate affecting this qubit
+            if j == max_spot:
+                break
+            elif qubit_idx in gates[j].qubits:
+                next_spot = j
+                break
+        return next_spot
 
 
     @classmethod
@@ -241,22 +269,46 @@ class FaultSet:
         # index of the gate
         for i in range(len(circ.gates)):
             g = circ.gates[i]
-            if len(g.qubits==1):
+            if len(g.qubits) == 1:
                 qubit_idx = g.qubits[0]
                 qubit_faults[qubit_idx][i] = {}
-                qubit_faults[qubit_idx][i]['X'] = []
-                qubit_faults[qubit_idx][i]['Z'] = []
-                qubit_faults[qubit_idx][i]['Y'] = []
-            if len(g.qubits==2):
+                qubit_faults[qubit_idx][i]['I'] = np.zeros(2*num_qubits, dtype=np.int8)
+                qubit_faults[qubit_idx][i]['X'] = 0
+                qubit_faults[qubit_idx][i]['Z'] = 0
+                qubit_faults[qubit_idx][i]['Y'] = 0
+            if len(g.qubits) == 2:
                 ctrl, trgt = g.qubits
                 qubit_faults[ctrl][i] = {}
-                qubit_faults[ctrl][i]['X'] = []
-                qubit_faults[ctrl][i]['Z'] = []
-                qubit_faults[ctrl][i]['Y'] = []
+                qubit_faults[ctrl][i]['I'] = np.zeros(2*num_qubits, dtype=np.int8)
+                qubit_faults[ctrl][i]['X'] = 0
+                qubit_faults[ctrl][i]['Z'] = 0
+                qubit_faults[ctrl][i]['Y'] = 0
                 qubit_faults[trgt][i] = {}
-                qubit_faults[trgt][i]['X'] = []
-                qubit_faults[trgt][i]['Z'] = []
-                qubit_faults[trgt][i]['Y'] = []
+                qubit_faults[trgt][i]['I'] = np.zeros(2*num_qubits, dtype=np.int8)
+                qubit_faults[trgt][i]['X'] = 0
+                qubit_faults[trgt][i]['Z'] = 0
+                qubit_faults[trgt][i]['Y'] = 0
+        
+        # Add one more spot for each qubit after the last gate affecting it
+        for qb in range(num_qubits):
+            last_gate_idx = max(qubit_faults[qb].keys())
+            qubit_faults[qb][last_gate_idx+1] = {}
+
+            no_error = np.zeros(2*num_qubits, dtype=np.int8)
+            qubit_faults[qb][last_gate_idx+1]['I'] = no_error
+            
+            x_error = np.zeros(2*num_qubits, dtype=np.int8)
+            x_error[qb] = 1
+            qubit_faults[qb][last_gate_idx+1]['X'] = x_error
+            
+            z_error = np.zeros(2*num_qubits, dtype=np.int8)
+            z_error[qb+num_qubits] = 1
+            qubit_faults[qb][last_gate_idx+1]['Z'] = z_error
+            
+            y_error = np.zeros(2*num_qubits, dtype=np.int8)
+            y_error[qb] = 1
+            y_error[qb+num_qubits] = 1
+            qubit_faults[qb][last_gate_idx+1]['Y'] = y_error
 
         # Now qubit_faults contains an empty array for every possible 
         # point in the circuit where an error could start to propagate  
@@ -265,61 +317,94 @@ class FaultSet:
         # Iterate through the circuit in reverse and forward propagate faults
         for i in range(len(circ.gates)-1, -1, -1):
 
-            gate = circ.gates[i]
+            g = circ.gates[i]
 
-            if len(g.qubit==1):
+            # print(f"Propagating through gate {i}: {g.name} on qubits {g.qubits}")
 
-                # Propagate X faults
-                x_error = np.zeros(2*num_qubits, dtype=np.int8)
+            if len(g.qubits) == 1:
+                
                 qubit_idx = g.qubits[0]
-                x_error[qubit_idx] = 1
 
-                propagated_error = cls.forward_propagate(g, x_error)
+                for f in ["X", "Y", "Z"]:
 
-            elif len(g.qubits==2):
+                    # Propagate fault f
+                    error = np.zeros(2*num_qubits, dtype=np.int8)
+                    if f == "X":
+                        error[qubit_idx] = 1
+                    elif f == "Z":
+                        error[qubit_idx+num_qubits] = 1
+                    elif f == "Y":
+                        error[qubit_idx] = 1
+                        error[qubit_idx+num_qubits] = 1
+
+                    propagated_error = cls.forward_propagate(g, error)
+                    
+                    # I want to know which error is on this qubit after the propagation of fault f
+                    error_name = FaultSet.convert_2n_array_to_name(propagated_error, qubit_idx)
+                    
+                    # Now find the next spot for this qubit
+                    max_spot = max(qubit_faults[qubit_idx].keys())
+                    next_spot = cls.find_next_spot(i, max_spot, qubit_idx, circ.gates)
+
+                    new_error = qubit_faults[qubit_idx][next_spot][error_name]
+                    qubit_faults[qubit_idx][i][f] = new_error
+
+            elif len(g.qubits) == 2:
                 ctrl, trgt = g.qubits
 
-                # X error on control qubit
-                x_error = np.zeros(2*num_qubits, dtype=np.int8)
-                x_error[ctrl] = 1
+                for f in ["X", "Y", "Z"]:
+                          
+                    for qb in [ctrl, trgt]: 
+                        # Propagate fault f
+                        error = np.zeros(2*num_qubits, dtype=np.int8)
+                        if f == "X":
+                            error[qb] = 1
+                        elif f == "Z":
+                            error[qb+num_qubits] = 1
+                        elif f == "Y":
+                            error[qb] = 1
+                            error[qb+num_qubits] = 1
 
-                propagated_error = cls.forward_propagate(g, x_error) # 2n array describing the propagated error
+                        propagated_error = cls.forward_propagate(g, error) # 2n array describing the propagated error
+                        # print(f"Propagated error for qubit {qb} and fault {f} after gate {i}: {propagated_error}")
 
-                # First possibility: we are looking at the last gate affectind qubit ctrl
-                if i == max(qubit_faults[ctrl].keys()):
-                    qubit_faults[ctrl][i]['X'].append(propagated_error)
-                
-                # Second possibility:
-                else:
-                    # I want to know which error is on the control qubit after the gate
-                    error_name = 'I'
-                    if propagated_error[ctrl] == 1 and propagated_error[ctrl+num_qubits//2] == 1:
-                        error_name = 'Y'
-                    elif propagated_error[ctrl] == 1:
-                        error_name = 'X'
-                    elif propagated_error[ctrl+num_qubits//2] == 1:
-                        error_name = 'Z'
+                        # I want to know which error is on the ctrl qubit after the gate
+                        error_name_ctrl = cls.convert_2n_array_to_name(propagated_error, ctrl)
 
-                    # Now go through every possible error from the next spot and xor it with the propagated error
-                    next_spot = -1
-                    for j in range(i+1, len(circ.gates)):
-                        if ctrl in circ.gates[j].qubits:
-                            next_spot = j
-                            break
+                        # I want to know which error is on the target qubit after the gate
+                        error_name_trgt = cls.convert_2n_array_to_name(propagated_error, trgt)
+
+                        # Now find the next spot for the control qubit
+                        max_spot_ctrl = max(qubit_faults[ctrl].keys())
+                        next_spot_ctrl = cls.find_next_spot(i, max_spot_ctrl, ctrl, circ.gates)
+
+                        # print(f"Next spot for control qubit {ctrl} after gate {i}: {next_spot_ctrl}")
+
+                        # Now find the next spot for the target qubit
+                        max_spot_trgt = max(qubit_faults[trgt].keys())
+                        next_spot_trgt = cls.find_next_spot(i, max_spot_trgt, trgt, circ.gates)
+
+                        # print(f"Next spot for target qubit {trgt} after gate {i}: {next_spot_ctrl}")
+
+                        new_error = qubit_faults[ctrl][next_spot_ctrl][error_name_ctrl] ^ qubit_faults[trgt][next_spot_trgt][error_name_trgt]
+                        # print(f"New error for qubit {qb} after gate {i} and fault {f}: {new_error}")
+                        qubit_faults[qb][i][f] = new_error
                     
-                    for e in qubit_faults[ctrl][next_spot][error_name]:
-                        qubit_faults[ctrl][i]['X'].append(propagated_error ^ e)
-                # TODO: do the same for Z and Y errors on the control qubit and for X, Y and Z errors on the target qubit
-                # TODO: check that the algorithm works correctly
+            # print(" -----------------------------")
                     
                     
-        # # Create the fault set
-        # fs = cls.from_fault_array(np.array([fault for faults in qubit_faults for gate_faults in faults for fault in gate_faults], dtype=np.int8)) # Hopefully flattens the arrray qubit_faults
-        # if not reduce:
-        #     return fs
+        # return qubit_faults
+        # Create the fault set
+        a = []
+        for qb in qubit_faults:
+            for qb_idx, faults in qb.items():
+                for fault_name, propagated_error in faults.items():
+                    if fault_name != "I":
+                        a.append(list(propagated_error))
+        fs = cls.from_fault_array(np.array(a, dtype=np.int8)) 
+        if not reduce:
+            return fs
         
-        # # code = circ.get_code()
-        # # TODO: remove equivalents w.r.t. stabilizers
 
 
     def make_readable(self) -> list[str]:
