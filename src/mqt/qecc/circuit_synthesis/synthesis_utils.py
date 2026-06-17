@@ -1230,7 +1230,10 @@ def vars_to_stab(measurement: list[z3.BoolRef | bool], generators: npt.NDArray[n
         msg = "Generators and measurement must have the same length"
         raise ValueError(msg)
 
+    # Initialize
     measurement_stab = symbolic_scalar_mult(generators[0], measurement[0])
+
+    # Iteratively add remaining generators
     for i, scalar in enumerate(measurement[1:]):
         measurement_stab = symbolic_vector_add(measurement_stab, symbolic_scalar_mult(generators[i + 1], scalar))
     return measurement_stab

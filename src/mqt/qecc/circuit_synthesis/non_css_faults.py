@@ -8,7 +8,7 @@ import numpy as np
 import z3
 from ldpc.mod2.mod2_numpy import row_echelon
 
-# from .synthesis_utils import symbolic_vector_add, symbolic_vector_eq, vars_to_stab
+from .synthesis_utils import symbolic_vector_add, symbolic_vector_eq, vars_to_stab
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -248,7 +248,7 @@ class FaultSet:
 
 
     @classmethod
-    def from_circuit(cls, circ: Circuit, reduce: bool = False) -> FaultSet:
+    def from_circuit(cls, circ: Circuit) -> FaultSet:
         """Generate a FaultSet from a circuit
         
         Args:
@@ -402,8 +402,7 @@ class FaultSet:
                     if fault_name != "I":
                         a.append(list(propagated_error))
         fs = cls.from_fault_array(np.array(a, dtype=np.int8)) 
-        if not reduce:
-            return fs
+        return fs
         
 
 
@@ -423,3 +422,50 @@ class FaultSet:
                     fault_str += f"I{i} "
             readable_faults.append(fault_str.strip())
         return readable_faults
+
+    def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) -> np.ndarray[np.int8]:
+        """Compute the coset leader of a fault given a set of stabilizer generators
+        
+        Returns:
+            The symbolic representation of the coset leader of the fault.
+        """
+        if len(generators) == 0:
+            return fault
+        
+        n = len(fault) // 2
+
+        s = z3.Optimize()
+
+        # Create symbolic variables for the coset leader [e_0, ..., e_{2n-1}]
+        leader = [z3.Bool(f"e_{i}") for i in range(len(fault))]
+
+        # Create coefficient variables for generators
+        coeff = [z3.Bool(f"c_{i}") for i in range(len(generators))]
+
+        # Compute the symbolic stabilizer combination
+        g = vars_to_stab(coeff, generators)
+        
+        # Add constraint: leader = fault XOR g (in GF(2))
+        s.add(symbolic_vector_eq(np.array(leader), symbolic_vector_add(fault.astype(bool), g)))
+
+        # Create the weight objective: count qubits with X OR Z errors
+        # For each qubit i, we have leader[i] (X part) and leader[n+i] (Z part)
+        # We want to minimize the number of qubits where (leader[i] OR leader[n+i]) is True
+        weight_terms = []
+        for i in range(n):
+            x_part = leader[i]
+            z_part = leader[n + i]
+            # Create symbolic OR: qubit i has an error if X part OR Z part is 1
+            qubit_error = z3.Or(x_part, z_part)
+            weight_terms.append(qubit_error)
+    
+        # Minimize the total number of qubits with errors
+        s.minimize(z3.Sum(weight_terms))
+    
+        # Solve (always satisfiable)
+        s.check()  
+        m = s.model()
+    
+        # Extract the solution and convert to binary array
+        result = np.array([bool(m[leader[i]]) for i in range(len(fault))], dtype=np.int8)
+        return result
