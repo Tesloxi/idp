@@ -3,18 +3,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 import stim
-from qiskit import QuantumCircuit
-from qiskit.transpiler.passes import RemoveResetInZeroState
-
-
-if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Iterable
-
-    import numpy.typing as npt
 
 class Gate:
     """Represents a single or two-qubit gate."""

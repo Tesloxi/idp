@@ -402,12 +402,14 @@ class FaultSet:
                     if fault_name != "I":
                         a.append(list(propagated_error))
         fs = cls.from_fault_array(np.array(a, dtype=np.int8)) 
-        return fs
+        return fs       
+
+
+    def make_fault_set_readable(self) -> list[str]:
+        """Return a human-readable representation of the faults in the fault set.
         
-
-
-    def make_readable(self) -> list[str]:
-        """Return a human-readable representation of the faults in the fault set."""
+        e.g. [1, 0, 1, 0, 0, 1] -> X1 I2 Y3
+        """
         readable_faults = []
         for fault in self.faults:
             fault_str = ""
@@ -423,49 +425,65 @@ class FaultSet:
             readable_faults.append(fault_str.strip())
         return readable_faults
 
-    def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) -> np.ndarray[np.int8]:
-        """Compute the coset leader of a fault given a set of stabilizer generators
+    def faults_to_coset_leaders(self, generators: np.ndarray[np.int8]) -> None:
+        """Map all faults in the set to their coset leaders with respect to the stabilizer generators.
         
-        Returns:
-            The symbolic representation of the coset leader of the fault.
+        This method modifies the fault set in place, replacing each fault with its coset leader.
+        Warning: this might take a while!
+        
+        Args:
+            generators: A 2D numpy array where each row is a stabilizer generator
         """
-        if len(generators) == 0:
-            return fault
+        if generators.ndim != 2 or generators.shape[1] != 2*self.num_qubits:
+            msg = f"Generators must be a 2D array with {2*self.num_qubits} columns."
+            raise ValueError(msg)
         
-        n = len(fault) // 2
+        self.faults = np.array([coset_leader(fault, generators) for fault in self.faults], dtype=np.int8)
+        self.faults = np.unique(self.faults, axis=0) # Remove duplicates after mapping to coset leaders
 
-        s = z3.Optimize()
-
-        # Create symbolic variables for the coset leader [e_0, ..., e_{2n-1}]
-        leader = [z3.Bool(f"e_{i}") for i in range(len(fault))]
-
-        # Create coefficient variables for generators
-        coeff = [z3.Bool(f"c_{i}") for i in range(len(generators))]
-
-        # Compute the symbolic stabilizer combination
-        g = vars_to_stab(coeff, generators)
-        
-        # Add constraint: leader = fault XOR g (in GF(2))
-        s.add(symbolic_vector_eq(np.array(leader), symbolic_vector_add(fault.astype(bool), g)))
-
-        # Create the weight objective: count qubits with X OR Z errors
-        # For each qubit i, we have leader[i] (X part) and leader[n+i] (Z part)
-        # We want to minimize the number of qubits where (leader[i] OR leader[n+i]) is True
-        weight_terms = []
-        for i in range(n):
-            x_part = leader[i]
-            z_part = leader[n + i]
-            # Create symbolic OR: qubit i has an error if X part OR Z part is 1
-            qubit_error = z3.Or(x_part, z_part)
-            weight_terms.append(qubit_error)
+def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) -> np.ndarray[np.int8]:
+    """Compute the coset leader of a fault given a set of stabilizer generators
     
-        # Minimize the total number of qubits with errors
-        s.minimize(z3.Sum(weight_terms))
+    Returns:
+        The symbolic representation of the coset leader of the fault.
+    """
+    if len(generators) == 0:
+        return fault
     
-        # Solve (always satisfiable)
-        s.check()  
-        m = s.model()
+    n = len(fault) // 2
+
+    s = z3.Optimize()
+
+    # Create symbolic variables for the coset leader [e_0, ..., e_{2n-1}]
+    leader = [z3.Bool(f"e_{i}") for i in range(len(fault))]
+
+    # Create coefficient variables for generators
+    coeff = [z3.Bool(f"c_{i}") for i in range(len(generators))]
+
+    # Compute the symbolic stabilizer combination
+    g = vars_to_stab(coeff, generators)
     
-        # Extract the solution and convert to binary array
-        result = np.array([bool(m[leader[i]]) for i in range(len(fault))], dtype=np.int8)
-        return result
+    # Add constraint: leader = fault XOR g (in GF(2))
+    s.add(symbolic_vector_eq(np.array(leader), symbolic_vector_add(fault.astype(bool), g)))
+
+    # Create the weight objective: count qubits with X OR Z errors
+    # For each qubit i, we have leader[i] (X part) and leader[n+i] (Z part)
+    # We want to minimize the number of qubits where (leader[i] OR leader[n+i]) is True
+    weight_terms = []
+    for i in range(n):
+        x_part = leader[i]
+        z_part = leader[n + i]
+        # Create symbolic OR: qubit i has an error if X part OR Z part is 1
+        qubit_error = z3.Or(x_part, z_part)
+        weight_terms.append(qubit_error)
+
+    # Minimize the total number of qubits with errors
+    s.minimize(z3.Sum(weight_terms))
+
+    # Solve (always satisfiable)
+    s.check()  
+    m = s.model()
+
+    # Extract the solution and convert to binary array
+    result = np.array([bool(m[leader[i]]) for i in range(len(fault))], dtype=np.int8)
+    return result
