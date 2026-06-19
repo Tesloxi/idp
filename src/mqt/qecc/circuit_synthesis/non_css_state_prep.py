@@ -6,11 +6,77 @@ import numpy as np
 import z3
 import logging
 
-from mqt.qecc.circuit_synthesis.non_css_faults import Faultset
+from mqt.qecc.circuit_synthesis.non_css_faults import Faultset, coset_leader, product_fault_set
+from mqt.qecc.circuit_synthesis.non_css_circuits import Circuit
 from .synthesis_utils import vars_to_stab
 
 
 logger = logging.getLogger(__name__)
+
+class NCSSFaultyStatePrepCircuit:
+    """Represents a state preparation circuit for a non-CSS code."""
+
+    def __init__(self, circ: Circuit, stabilizers: np.ndarray, max_errors: int) -> None:
+        """Initialize a state preparation circuit.
+        
+        Args: 
+            circ: The state preparation circuit.
+            stabilizers: The list of stabilizer generators in symplectic format.
+            max_errors: Macimum number of independent errors that can happen in the circuit.
+        """
+        self.circ = circ
+        self.stabs = stabilizers
+        self.num_qubits = circ.num_qubits()
+        self.max_errors = max_errors
+        
+        self.fault_sets: list[Faultset] = []
+        self.fault_sets_unreduced: list[Faultset] = []
+
+    def compute_fault_set(self, num_errors: int = 1, reduce: bool = True) -> Faultset:
+        """Compute the fault set of the state.
+        
+        Args:
+            num_errors: The number of independant errors to propagate through the circuit.
+            reduce: If True, reduce the fault set by the stabilizers of the code to reduce weights.
+            
+        Returns:
+            The fault set of the state.
+        """
+        if num_errors == 0:
+            return Faultset(self.num_qubits)
+        
+        fault_sets = self.fault_sets
+        fault_sets_unreduced = self.fault_sets_unreduced
+
+        if len(fault_sets) >= num_errors:
+            return fault_sets[num_errors - 1] # return cached value
+        
+        if num_errors <= 0:
+            msg = "Cannot compute fault set for less than 1 error."
+            raise ValueError(msg)
+        elif num_errors == 1:
+            logger.info("Computing fault set for 1 error.")
+            fs = Faultset.from_circuit(self.circ)
+        else:
+            logger.info(f"Computing fault set for {num_errors} errors.")
+            self.compute_fault_set(num_errors - 1, reduce=reduce)
+            faults = fault_sets[num_errors - 2]
+            single_faults = fault_sets_unreduced[0]
+
+            fs = product_fault_set(faults, single_faults)
+            fs.remove_zero_rows()
+            fs.remove_duplicates()
+
+        fault_sets_unreduced.append(fs.copy)
+
+        # Reduce faults by stabilizer
+        if reduce: 
+            logger.info("Removing stabilizer equivalent faults.")
+            fs.remove_equivalent(self.stabs)
+
+        #TODO: filter fault set by the weight of faults
+
+        return fs
 
 def all_verification_stabilizers(
         fault_set: Faultset,

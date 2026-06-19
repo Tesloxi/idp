@@ -403,7 +403,55 @@ class FaultSet:
                         a.append(list(propagated_error))
         fs = cls.from_fault_array(np.array(a, dtype=np.int8)) 
         return fs       
+    
+    def normalize(self, stabs: np.ndarray[np.int8]) -> None:
+        """Normalize the faults with respect to a stabilizer group.
 
+        A fault is considered normalized if its entries in the pivot columns of the RREF of the stabilizer matrix are zero.
+
+        Args:
+            stabs: A 2D numpy array where each row is a stabilizer generator.
+        """
+        if stabs.shape[1] != 2*self.num_qubits:
+            msg = f"Stabilizer matrix must have {2*self.num_qubits} columns."
+            raise ValueError(msg)
+        if stabs.ndim != 2:
+            msg = "Stabilizer matrix must be 2-dimensional."
+            raise ValueError(msg)
+        rref, _, _, pivots = row_echelon(stabs, full=True)
+        # Reduce all faults to their coset representatives
+        for i, fault in enumerate(self.faults):
+            # Identify the indices of pivot columns where the fault has a 1
+            active_pivots = [pivots.index(p) for p in pivots if fault[p] == 1]
+            if active_pivots: # Ensure there are active pivots to reduce with 
+                self.faults[i] = fault ^ np.bitwise_xor.reduce(rref[active_pivots], axis=0)
+
+
+    def remove_zero_rows(self) -> None:
+        """Remove all zero rows from the fault set.
+        
+        This method modifies the fault set in place, removing any rows that are entirely zero.
+        """
+        self.faults = self.faults[np.any(self.faults, axis=1)]
+
+    def remove_duplicates(self) -> None:
+        """Remove duplicate faults from the fault set.
+        
+        This method modifies the fault set in place, ensuring that each fault appears only once.
+        """
+        self.faults = np.unique(self.faults, axis=0)
+
+    def remove_equivalent(self, stabs: np.ndarray[np.int8]) -> None:
+        """Remove faults belonging to the same coset with respect to the stabilizer group.
+
+        Args:
+            stabs: A 2D numpy array where each row is a stabilizer generator.
+        """
+        self.normalize(stabs)
+
+        # remove all zero rows
+        self.remove_zero_rows()
+        self.remove_duplicates()
 
     def make_fault_set_readable(self) -> list[str]:
         """Return a human-readable representation of the faults in the fault set.
@@ -487,3 +535,25 @@ def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) ->
     # Extract the solution and convert to binary array
     result = np.array([bool(m[leader[i]]) for i in range(len(fault))], dtype=np.int8)
     return result
+
+def product_fault_set(lhs: FaultSet, rhs: FaultSet) -> FaultSet:
+    """Generate fault set by forming the product of all faults of two fault sets.
+    
+    Args: 
+        lhs: The first fault set.
+        rhs: The second fault set.
+        
+    Returns:
+        Fault set containing all products of faults of lhs and rhs.
+    """
+    if lhs.num_qubits != rhs.num_qubits:
+        msg = "Fault sets must have the same number of qubits to combine."
+        raise ValueError(msg)
+    
+    new_faults = np.array([])
+
+    for f1 in lhs:
+        for f2 in rhs:
+            new_faults.append(f1 ^ f2)
+
+    return FaultSet.from_fault_array(new_faults)
