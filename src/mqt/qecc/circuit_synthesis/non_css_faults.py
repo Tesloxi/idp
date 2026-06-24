@@ -489,6 +489,26 @@ class FaultSet:
         self.faults = np.array([coset_leader(fault, generators) for fault in self.faults], dtype=np.int8)
         self.faults = np.unique(self.faults, axis=0) # Remove duplicates after mapping to coset leaders
 
+    def filter_by_weight_at_least(self, w: int, stabs: np.ndarray[np.int8]) -> None:
+        """Filter faults by weight with respect to a stabilizer group.
+
+        A fault is removed if its coset leader has weight lower than w.
+        This operation also removes stabilizer equivalent errors and maps faults to their coset leaders.
+
+        Args:
+            w: Weight faults are filtered by.
+            stabs: A 2D numpy array where each row is a stabilizer generator.
+        """
+        self.remove_equivalent(stabs)
+        self.faults_to_coset_leaders(stabs)
+
+        if len(self.faults) == 0:
+            return
+        # filter remaining faults by weight
+        weights = np.sum(self.faults, axis=1)
+        mask = weights >= w
+        self.faults = self.faults[mask]
+
 def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) -> np.ndarray[np.int8]:
     """Compute the coset leader of a fault given a set of stabilizer generators
     

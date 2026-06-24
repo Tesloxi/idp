@@ -122,7 +122,7 @@ class FaultyStatePrepCircuit:
         # reduce faults by stabilizer
         stabs = self.x_checks if x_errors else self.z_checks
 
-        if reduce:
+        if reduce: # useless because we anyway call remove_equivalent in filter_by_weight_at_least
             logger.info("Removing stabilizer equivalent faults.")
             fs.remove_equivalent(stabs)
 

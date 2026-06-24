@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 import stim
+from qiskit import QuantumCircuit
 
 class Gate:
     """Represents a single or two-qubit gate."""
@@ -78,6 +79,18 @@ class Circuit:
 
         return stim_circuit
     
+    def to_qiskit_circuit(self) -> QuantumCircuit:
+        """Convert the CNOT circuit to a qiskit.QuantumCircuit.
+
+        Args:
+            remove_resets: If set to `True`, removes resets in the |0> state from the circuit.
+
+        Returns:
+            A qiskit.QuantumCircuit representation of the CNOT circuit.
+        """
+        circ = QuantumCircuit.from_qasm_str(self.to_stim_circuit().to_qasm(open_qasm_version=2))
+        return circ
+    
     def num_qubits(self) -> int:
         """Return the number of qubits used in the circuit.
         
@@ -86,3 +99,13 @@ class Circuit:
         indices = [q for gate in self.gates for q in gate.qubits] 
 
         return max(indices, default=0) + 1
+
+    def get_stabilizers(self) -> np.ndarray:
+        
+        c = self.to_stim_circuit
+
+        tableau = stim.Tableau.from_circuit(c)
+
+        stabs = stim.Tableau.to_stabilizers()
+
+        #TODO
