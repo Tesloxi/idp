@@ -24,13 +24,16 @@ class Gate:
             raise ValueError(msg)
         self.qubits = qubits
 
+    def __repr__(self) -> str:
+        return f"Gate({self.name}, {self.qubits})"
+
     def num_qubits(self) -> int:
         """Return the number of qubits affected by the gate."""
         return len(self.qubits)
     
     def to_array(self) -> np.ndarray:
         """Return the gate as an array"""
-        if self.name == "CNOT":
+        if self.name == "CNOT" or self.name == "CX":
             return np.array([[1, 0, 0, 0],
                              [0, 1, 0, 0],
                              [0, 0, 0, 1],
@@ -56,6 +59,9 @@ class Circuit:
     def __init__(self) -> None:
         """Initialize an empy circuit"""
         self.gates: list[Gate] = []
+
+    def  __repr__(self) -> str:
+        return f"Circuit({self.gates})"
 
     def add_gate(self, gate: Gate) -> None:
         """Add a gate to the circuit.
@@ -91,6 +97,28 @@ class Circuit:
         circ = QuantumCircuit.from_qasm_str(self.to_stim_circuit().to_qasm(open_qasm_version=2))
         return circ
     
+    @classmethod
+    def from_stim_circuit(cls, stim_circuit: stim.Circuit) -> Circuit:
+        """Convert a stim.Circuit to a Circuit.
+
+        Args:
+            stim_circuit: The stim.Circuit to be converted.
+
+        Returns:
+            A Circuit representation of the stim.Circuit.
+        """
+        circ = cls()
+        for gate in stim_circuit:
+            print(gate.name)
+            t = gate.targets_copy()
+            if gate.name in ["H", "X", "Y", "Z", "S"]:
+                for x in t:
+                    circ.add_gate(Gate(gate.name, [x.qubit_value]))
+            elif gate.name in ["CX", "CZ"]:
+                for i in range(0, len(t), 2):
+                    circ.add_gate(Gate(gate.name, [t[i].qubit_value, t[i+1].qubit_value]))
+        return circ
+    
     def num_qubits(self) -> int:
         """Return the number of qubits used in the circuit.
         
@@ -102,10 +130,24 @@ class Circuit:
 
     def get_stabilizers(self) -> np.ndarray:
         
-        c = self.to_stim_circuit
+        c = self.to_stim_circuit()
 
-        tableau = stim.Tableau.from_circuit(c)
+        tableau = c.to_tableau()
 
-        stabs = stim.Tableau.to_stabilizers()
+        stabs = tableau.to_stabilizers()
 
-        #TODO
+        print(stabs)
+
+        new_stabs = []
+
+        for stab in stabs:
+            new_stab = np.zeros(2 * self.num_qubits(), dtype=np.int8)
+            s = stab.to_numpy()
+            for i in range(self.num_qubits()):
+                if s[0][i]:
+                    new_stab[i] = 1
+                if s[1][i]:
+                    new_stab[i + self.num_qubits()] = 1
+            new_stabs.append(new_stab)
+
+        return np.array(new_stabs)
