@@ -109,7 +109,6 @@ class Circuit:
         """
         circ = cls()
         for gate in stim_circuit:
-            print(gate.name)
             t = gate.targets_copy()
             if gate.name in ["H", "X", "Y", "Z", "S"]:
                 for x in t:
@@ -128,6 +127,29 @@ class Circuit:
 
         return max(indices, default=0) + 1
 
+    @classmethod
+    def from_stabilizers(cls, stabilizers: np.ndarray) -> Circuit:
+        """Convert a list of stabilizers to a circuit.
+
+        Args:
+            stabilizers: The list of stabilizers in symplectic format.
+
+        Returns:
+            A Circuit representation of the stabilizers.
+        """
+        n = len(stabilizers[0])//2
+        pauli_stabilizers = []
+        for stab in stabilizers:
+            x = stab[:n]
+            z = stab[n:]
+            pauli_stab = stim.PauliString.from_numpy(xs=x.astype(np.bool_), zs=z.astype(np.bool_))
+            pauli_stabilizers.append(pauli_stab)
+
+        tableau = stim.Tableau.from_stabilizers(pauli_stabilizers, allow_underconstrained=True)
+        stim_circuit = tableau.to_circuit()
+        circ = cls.from_stim_circuit(stim_circuit)
+        return circ
+
     def get_stabilizers(self) -> np.ndarray:
         
         c = self.to_stim_circuit()
@@ -135,8 +157,6 @@ class Circuit:
         tableau = c.to_tableau()
 
         stabs = tableau.to_stabilizers()
-
-        print(stabs)
 
         new_stabs = []
 

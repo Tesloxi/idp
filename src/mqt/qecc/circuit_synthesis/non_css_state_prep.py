@@ -67,7 +67,7 @@ class NCSSFaultyStatePrepCircuit:
             fs.remove_zero_rows()
             fs.remove_duplicates()
 
-        fault_sets_unreduced.append(fs.copy)
+        fault_sets_unreduced.append(fs.copy())
 
         logger.info("Removing low-weight faults.")
         fs.filter_by_weight_at_least(num_errors + 1, self.stabs)

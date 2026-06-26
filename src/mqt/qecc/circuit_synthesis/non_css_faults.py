@@ -509,6 +509,16 @@ class FaultSet:
         mask = weights >= w
         self.faults = self.faults[mask]
 
+    def copy(self) -> FaultSet:
+        """Create a copy of the fault set.
+
+        Returns:
+            A new FaultSet object that is a copy of the current one.
+        """
+        new_fault_set = FaultSet(self.num_qubits)
+        new_fault_set.faults = np.copy(self.faults)
+        return new_fault_set
+
 def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) -> np.ndarray[np.int8]:
     """Compute the coset leader of a fault given a set of stabilizer generators
     
@@ -570,10 +580,12 @@ def product_fault_set(lhs: FaultSet, rhs: FaultSet) -> FaultSet:
         msg = "Fault sets must have the same number of qubits to combine."
         raise ValueError(msg)
     
-    new_faults = np.array([])
+    new_faults = []
 
-    for f1 in lhs:
-        for f2 in rhs:
+    for f1 in lhs.faults:
+        for f2 in rhs.faults:
             new_faults.append(f1 ^ f2)
+
+    new_faults = np.array(new_faults)
 
     return FaultSet.from_fault_array(new_faults)
