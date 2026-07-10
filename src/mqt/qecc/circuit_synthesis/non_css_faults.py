@@ -272,7 +272,7 @@ class FaultSet:
             if len(g.qubits) == 1:
                 qubit_idx = g.qubits[0]
                 qubit_faults[qubit_idx][i] = {}
-                qubit_faults[qubit_idx][i]['I'] = np.zeros(2*num_qubits, dtype=np.int8)
+                qubit_faults[qubit_idx][i]['I'] = np.zeros(2*num_qubits, dtype=np.int8) # add an entry for the identity, useful later for two-qubit gates
                 qubit_faults[qubit_idx][i]['X'] = 0
                 qubit_faults[qubit_idx][i]['Z'] = 0
                 qubit_faults[qubit_idx][i]['Y'] = 0

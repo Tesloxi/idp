@@ -8,7 +8,7 @@ import logging
 
 from mqt.qecc.circuit_synthesis.non_css_faults import FaultSet, coset_leader, product_fault_set
 from mqt.qecc.circuit_synthesis.non_css_circuits import Circuit
-from .synthesis_utils import vars_to_stab
+from .synthesis_utils import vars_to_stab, iterative_search_with_timeout, run_with_timeout
 
 
 logger = logging.getLogger(__name__)
@@ -75,21 +75,183 @@ class NCSSFaultyStatePrepCircuit:
 
         return fs
 
-def all_verification_stabilizers(
+def all_gate_optimal_verification_stabilizers(
+    fault_sets: list[FaultSet],
+    stabs: np.ndarray[np.int8],
+    min_timeout: int = 1,
+    max_timeout: int = 3600,
+    max_ancillas: int| None = None,
+    return_all_solutions: bool = False,
+    weight_z: int = 1,
+    weight_x: int = 2,
+    weight_y: int = 2,
+) -> list[list[list[np.ndarray[np.int8]]]]:
+    """Return all equivalent verification stabilizers for the given fault sets.
+
+    The method uses an iterative search to find the optimal set of stabilizers by repeatedly computing the optimal circuit for each number of ancillas and gates.
+    This is repeated for each number of independent correctable errors in the state preparation circuit.
+    Thus the verificatioon circuit is constructed of multiple "layers" of stabilizers, each layer corresponding to a fault set it verifies.
+
+    Args:
+        fault_sets: List of fault sets to verify.
+        stabs: The stabilizer generators to verify the fault sets.
+
+    Returns:
+        A list of all equivalent stabilizers for each number of errors to verify the state preparation circuit.
+    """
+
+    n_layers = len(fault_sets)
+    layers: list[list[list[np.ndarray[np.int8]]]] = [[] for _ in range(n_layers)]
+    if max_ancillas is None:
+        max_ancillas = stabs.shape[0] # by default number of stabilizer generators
+
+    n_qubits = stabs.shape[1] // 2
+
+    def row_cost(row: np.ndarray[np.int8]) -> int:
+        """Compute the cost of a stabilizer row based on the number of X, Y, and Z terms it contains."""
+        x = row[:n_qubits]
+        z = row[n_qubits:]
+        cost = 0
+        for q in range(n_qubits):
+            if x[q] == 1 and z[q] == 1:
+                cost += weight_y
+            elif x[q] == 1:
+                cost += weight_x
+            elif z[q] == 1:
+                cost += weight_z
+            else:
+                continue
+        return cost
+    
+    min_row_cost = int(min(row_cost(row) for row in stabs))
+    max_row_cost = int(max(row_cost(row) for row in stabs))
+
+    # Find the optimal circuit for every number of errors int the preparation circuit
+    for layer in range(n_layers):
+        logger.info(f"Finding verification stabilizers for {layer + 1} errors")
+        faults = fault_sets[layer]
+
+        if len(faults) == 0:
+            logger.info(f"No non-trivial faults for {layer + 1} errors.")
+            layers[layer] = []
+            continue
+
+        # Start with the maximal number of ancillas
+        # A minimal gates solution must be achievable with these
+        num_anc = max_ancillas
+        min_cost = max(1, min_row_cost)
+        max_cost = max_row_cost * num_anc
+
+        logger.info(f"Finding verification stabilizers for {layer + 1} errors with cost {min_cost}..{max_cost} using {num_anc} ancillas")
+
+        def fun(cost_budget: int) -> list[np.ndarray[np.int8]] | None:
+            return verification_stabilizers(faults, stabs, num_anc, cost_budget, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
+        
+        res = iterative_search_with_timeout(fun, min_cost, max_cost, min_timeout, max_timeout)
+
+        if res is not None:
+            measurements, curr_cost = res
+        else:
+            measurements = None
+
+        if measurements is None:
+            logger.info(f"No verification stabilizers found for {layer + 1} errors")
+            return []  # No solution found
+        
+        logger.info(f"Found verification stabilizers for {layer + 1} errors with {num_cnots} CNOTs")
+        # If any measurements are unused we can reduce the number of ancillas at least by that
+        measurements = [m for m in measurements if np.any(m)]
+        num_anc = len(measurements)
+        # Iterate backwards to find the minimal number of cnots
+        logger.info(f"Finding minimal number of CNOTs for {layer + 1} errors")
+
+        def search_cost(cost_budget: int) -> list[np.ndarray[np.int8]] | None:
+            return verification_stabilizers(faults, stabs, num_anc, cost_budget, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
+        
+        while curr_cost - 1 > 0:
+            logger.info(f"Trying cost {curr_cost-1}")
+            cost_opt = run_with_timeout(search_cost, curr_cost-1, timeout=max_timeout)
+
+            if cost_opt and not isinstance(cost_opt, str):
+                curr_cost -= 1
+                measurements = cost_opt
+            else: 
+                break
+        
+        logger.info(f"Minimal cost for {layer+1} errors is: {curr_cost}")
+
+        # If the cost is minimal, we can reduce the number of ancillas
+        logger.info(f"Finding minimal number of ancillas for {layer + 1} errors")
+        while num_anc - 1 > 0:
+            logger.info(f"Trying {num_anc - 1} ancillas")
+
+            def search_anc(num_anc: int) -> list[np.ndarray[np.int8]] | None:
+                return verification_stabilizers(faults, stabs, num_anc, curr_cost, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
+            
+            anc_opt = run_with_timeout(search_anc, num_anc - 1, timeout=max_timeout)
+
+            if anc_opt and not isinstance(anc_opt, str):
+                num_anc -= 1
+                measurements = anc_opt
+            else:
+                break
+            
+        logger.info(f"Minimal number of ancillas for {layer + 1} errors is: {num_anc}")
+
+        if not return_all_solutions:
+            layers[layer] = [measurements]
+        else:
+            all_stabs = all_verification_stabilizers(faults, stabs, num_anc, curr_cost, return_all_solutions=True, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
+            if all_stabs:
+                layers[layer] = all_stabs
+                logger.info(f"Found {len(layers[layer])} equivalent solutions for {layer} errors")
+    return layers
+
+
+def verification_stabilizers(
         fault_set: FaultSet,
         stabilizers: np.ndarray[np.int8],
         num_anc: int,
-        num_cnots: int,
-        return_all_solutions: bool = False
-) -> list[list[np.ndarray[np.int8]]] | None:
-    """Return a list of verification stabilizers for independant errors in the state preparation circuit using z3.
+        max_cost: int,
+        weight_z: int = 1,
+        weight_x: int = 2,
+        weight_y: int = 2
+) -> list[np.ndarray[np.int8]] | None:
+    """Return a set of stabilizers detecting all errors in `fault_set`using at most `num_anc`ancillas and at most `num_gates` gates.
     
     Args:
         fault_set: The set of errors to verify.
         stabilizers: Stabilizer generators of the stabilizers measured.
         num_anc: The maximum number of ancilla qubits to use.
-        num_cnots: The maximum number of CNOT gates to use.
+        num_gates: The maximum number of gates to use.
+    """
+    solutions = all_verification_stabilizers(fault_set, stabilizers, num_anc, max_cost, return_all_solutions=False, weight_z=weight_z, weight_x=weight_x, weight_y=weight_y)
+    if solutions is None:
+        return None
+    return solutions[0]
+
+
+def all_verification_stabilizers(
+        fault_set: FaultSet,
+        stabilizers: np.ndarray[np.int8],
+        num_anc: int,
+        max_cost: int,
+        return_all_solutions: bool = False,
+        weight_z: int = 1,
+        weight_x: int = 2,
+        weight_y: int = 2
+) -> list[list[np.ndarray[np.int8]]] | None:
+    """Return a list of verification stabilizers for independant errors in the state preparation circuit using z3.
+    
+    Args:
+        fault_set: The set of errors to verify.
+        stabilizers: Stabilizer generators of the stabilizers measured shape (n_gens, 2*n_qubits) as [X|Z].
+        num_anc: The maximum number of ancilla qubits to use.
+        max_cost: The maximum weighted gate cost.
         return_all_solutions: If True, return all solutions. Otherwise return the first solution found
+        weight_z: Cost for a Z term on one qubit in a measured stabilizer.
+        weight_x: Cost for an X term.
+        weight_y: Cost for a Y term.
     """
 
     if fault_set.faults.shape[1] != stabilizers.shape[1]:
@@ -98,13 +260,13 @@ def all_verification_stabilizers(
     
     # Check if fault set can be verified, i.e. every fault can be detected by at least one measurement
     n = fault_set.faults.shape[1] // 2
-    a_f = fault_set.faults[:, :n]
-    b_f = fault_set.faults[:, n:]
-    a_s = stabilizers[:, :n]
-    b_s = stabilizers[:, n:]
+    fx = fault_set.faults[:, :n]
+    fz = fault_set.faults[:, n:]
+    sx = stabilizers[:, :n]
+    sz = stabilizers[:, n:]
     
-    # Symplectic product: a_f @ b_s^T + b_f @ a_s^T (mod 2)
-    anticommutes = (a_f @ b_s.T + b_f @ a_s.T) % 2
+    # Symplectic product: fx @ sz^T + fz @ sx^T (mod 2)
+    anticommutes = (fx @ sz.T + fz @ sx.T) % 2
     if any(np.all(anticommutes == 0, axis=1)):
         logger.warning("Some faults are not detectable...")
         return None
@@ -128,8 +290,25 @@ def all_verification_stabilizers(
         for error in fault_set
     ]))
 
-    # Assert that not too many CNOTs are used
-    solver.add(z3.Pble([(measurement[q], 1) for measurement in measurement_stabs for q in range(n_qubits)], num_cnots))
+    weighted_terms: list[tuple[z3.BoolRef, int]] = []
+    for measurement in measurement_stabs:
+        for q in range(n_qubits):
+            xq = measurement[q]
+            zq = measurement[n_qubits + q]
+
+            is_z = z3.And(z3.Not(xq), zq)
+            is_x = z3.And(xq, z3.Not(zq))
+            is_y = z3.And(xq, zq)
+
+            if weight_z > 0:
+                weighted_terms.append((is_z, weight_z))
+            if weight_x > 0:
+                weighted_terms.append((is_x, weight_x))
+            if weight_y > 0:
+                weighted_terms.append((is_y, weight_y))
+
+    solver.add(z3.PbLe(weighted_terms, max_cost))
+
 
     solutions = []
     while solver.check() == z3.sat:
