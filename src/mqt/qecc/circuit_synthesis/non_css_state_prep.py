@@ -75,6 +75,37 @@ class NCSSFaultyStatePrepCircuit:
 
         return fs
 
+def gate_optimal_verification_stabilizers(
+    fault_sets: list[FaultSet],
+    stabs: np.ndarray[np.int8],
+    min_timeout: int = 1,
+    max_timeout: int = 3600,
+    max_ancillas: int | None = None
+) -> list[list[np.ndarray[np.int8]]]:
+    """Return verification stabilizers for the given fault sets.
+
+    Args:
+        fault_sets: List of fault sets to verify.
+        stabs: The stabilizer generators to verify the fault sets.
+        min_timeout: The minimum time to allow each search to run for.
+        max_timeout: The maximum time to allow each search to run for.
+        max_ancillas: The maximum number of ancillas to allow in each layer verification circuit.
+
+    Returns:
+        A list of stabilizers for each number of errors to verify the state preparation circuit.
+    """
+    return [
+        layers[0] if layers != [] else []
+        for layers in all_gate_optimal_verification_stabilizers(
+            fault_sets,
+            stabs,
+            min_timeout,
+            max_timeout,
+            max_ancillas,
+            return_all_solutions=False
+        )
+    ]
+
 def all_gate_optimal_verification_stabilizers(
     fault_sets: list[FaultSet],
     stabs: np.ndarray[np.int8],
