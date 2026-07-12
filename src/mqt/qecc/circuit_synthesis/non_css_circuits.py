@@ -30,7 +30,7 @@ class Gate:
         if len(qubits) == 2 and qubits[0] == qubits[1]:
             msg = "Control and target qubits must be different."
             raise ValueError(msg)
-        if self.name not in ["CNOT", "CZ", "H", "S", "SDAG", "SQRTX", "SQRTXDAG"]:
+        if self.name not in ["CNOT", "CX", "CZ", "H", "S", "SDAG", "SDG", "SQRTX", "SQRTXDAG"]:
             msg = f"Unsupported gate: {name}"
             raise ValueError(msg)   
         self.qubits = qubits
@@ -60,7 +60,7 @@ class Gate:
         elif self.name == "S":
             return np.array([[1, 0],
                             [0, 1.0j]])
-        elif self.name == "SDAG":
+        elif self.name == "SDAG" or self.name == "SDG":
             return np.array([[1, 0],
                             [0, -1.0j]])
         elif self.name == "SQRTX":
@@ -163,6 +163,15 @@ class Circuit:
         indices = [q for gate in self.gates for q in gate.qubits] 
 
         return max(indices, default=0) + 1
+    
+    def draw(self, *args, **kwargs):
+        """Draw the circuit using Qiskit visualization tools.
+        
+        Args:
+            *args: Positional arguments for the Qiskit draw method.
+            **kwargs: Keyword arguments for the Qiskit draw method.
+        """
+        return self.to_qiskit_circuit().draw(*args, *kwargs)
 
     @classmethod
     def from_stabilizers(cls, stabilizers: np.ndarray) -> Circuit:
@@ -182,32 +191,31 @@ class Circuit:
             pauli_stab = stim.PauliString.from_numpy(xs=x.astype(np.bool_), zs=z.astype(np.bool_))
             pauli_stabilizers.append(pauli_stab)
 
-        tableau = stim.Tableau.from_stabilizers(pauli_stabilizers, allow_underconstrained=True)
+        tableau = stim.Tableau.from_stabilizers(pauli_stabilizers, allow_underconstrained=True, allow_redundant=True)
         stim_circuit = tableau.to_circuit()
         circ = cls.from_stim_circuit(stim_circuit)
         return circ
 
     def get_stabilizers(self) -> np.ndarray:
+        """Get the stabilizers of the circuit in symplectic format.
+        
+        Returns:
+            A list of stabilizers in symplectic format.
+        """
         
         c = self.to_stim_circuit()
 
         tableau = c.to_tableau()
 
-        stabs = tableau.to_stabilizers()
+        stabs = tableau.to_stabilizers() # list of stim.PauliString object
 
-        new_stabs = []
+        def stim_PauliString_to_symplectic(pauli_string: stim.PauliString) -> np.ndarray[np.int8]:
+            x, z = pauli_string.to_numpy()
+            return np.concatenate([x.astype(np.int8), z.astype(np.int8)])
 
-        for stab in stabs:
-            new_stab = np.zeros(2 * self.num_qubits(), dtype=np.int8)
-            s = stab.to_numpy()
-            for i in range(self.num_qubits()):
-                if s[0][i]:
-                    new_stab[i] = 1
-                if s[1][i]:
-                    new_stab[i + self.num_qubits()] = 1
-            new_stabs.append(new_stab)
+        symplectic_stabs = np.array([stim_PauliString_to_symplectic(stab) for stab in stabs], dtype=np.int8)
 
-        return np.array(new_stabs)
+        return symplectic_stabs
 
 def compose_circuit(circ1: Circuit, circ2: Circuit, wiring: dict[int, int] | None = None) -> tuple[Circuit, dict[int, int], dict[int, int]]:
     """Compose two circuits.

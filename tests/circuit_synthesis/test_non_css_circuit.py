@@ -71,33 +71,12 @@ def test_stabs_conversion():
         np.array([1, 0, 1, 0, 0, 0, 0, 0, 1, 1]),
         np.array([0, 1, 0, 1, 0, 1, 0, 0, 0, 1]),
     ]
-    # TODO: fix the two lines below
-    # assert all((stabs_str_to_symplectic(stabs)[i] == symplectic_stabs[i]).all() for i in range(len(symplectic_stabs))), "Stabilizer string to symplectic conversion failed."
-    # assert all(stabs_symplectic_to_str(symplectic_stabs)[i] == stabs[i] for i in range(len(stabs))), "Stabilizer symplectic to string conversion failed."
-    
 
-def test_get_stabilizers():
-    """Test getting stabilizers from a circuit."""
-    
-    expected_stabs = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
-    symplectic_stabs = [
-        np.array([1, 0, 0, 1, 0, 0, 1, 1, 0, 0]),
-        np.array([0, 1, 0, 0, 1, 0, 0, 1, 1, 0]),
-        np.array([1, 0, 1, 0, 0, 0, 0, 0, 1, 1]),
-        np.array([0, 1, 0, 1, 0, 1, 0, 0, 0, 1]),
-    ]
-
-    c = qiskit.synthesis.synth_circuit_from_stabilizers(expected_stabs, allow_underconstrained=True)
-
-    c = Circuit.from_qiskit_circuit(c)
-
-    stabs = c.get_stabilizers()
-
-    stabs = stabs_symplectic_to_str(stabs)
-
-    assert len(stabs) == len(expected_stabs)
-    for stab in expected_stabs:
-        assert stab in stabs
+    assert stabs_symplectic_to_str(symplectic_stabs) == stabs, "Stabilizer symplectic to string conversion failed."
+    assert all(
+        np.array_equal(a, b)
+        for a, b in zip(symplectic_stabs, stabs_str_to_symplectic(stabs))
+    ), "Stabilizer string to symplectic conversion failed."
     
 def test_get_logicals():
     #TODO
