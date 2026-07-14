@@ -453,6 +453,10 @@ class FaultSet:
         self.remove_zero_rows()
         self.remove_duplicates()
 
+    def to_set(self) -> set[tuple[int, ...]]:
+        """Convert the fault set to a set of tuples for easier comparison."""
+        return set(map(tuple, self.faults))
+
     def make_fault_set_readable(self) -> list[str]:
         """Return a human-readable representation of the faults in the fault set.
         
