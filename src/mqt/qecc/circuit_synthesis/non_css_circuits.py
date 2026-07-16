@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import numpy as np
 import stim
-from qiskit import QuantumCircuit
+from qiskit import QuantumCircuit, synthesis, compiler
 
 from mqt.qecc.circuit_synthesis.circuit_utils import compose_circuits
+
+
+BASIS_GATES = {"cx", "cz", "h", "s", "sdg", "sx", "sxdg", "x", "y", "z"}
 
 class Gate:
     """Represents a single or two-qubit gate."""
@@ -16,11 +19,11 @@ class Gate:
         """Initialize a gate.
         
         Args:
-            str: name of the gate "CNOT", "CZ", "H", "S", "SDAG", "SQRTX", "SQRTXDAG"
+            str: name of the gate must be in BASIS_GATES
             qubits: The list of affected qubits. For two qubit-gates, 
                     qubits[0] is the control and qubits[1] the target
         """
-        self.name = name.upper()
+        self.name = name.lower()
         if len(qubits) > 2:
             msg = "Gates must have at most two qubits."
             raise ValueError(msg)
@@ -30,7 +33,7 @@ class Gate:
         if len(qubits) == 2 and qubits[0] == qubits[1]:
             msg = "Control and target qubits must be different."
             raise ValueError(msg)
-        if self.name not in ["CNOT", "CX", "CZ", "H", "S", "SDAG", "SDG", "SQRTX", "SQRTXDAG"]:
+        if self.name not in BASIS_GATES:
             msg = f"Unsupported gate: {name}"
             raise ValueError(msg)   
         self.qubits = qubits
@@ -44,29 +47,29 @@ class Gate:
     
     def to_array(self) -> np.ndarray:
         """Return the gate as an array"""
-        if self.name == "CNOT" or self.name == "CX":
+        if self.name == "cnot" or self.name == "cx":
             return np.array([[1, 0, 0, 0],
                              [0, 1, 0, 0],
                              [0, 0, 0, 1],
                              [0, 0, 1, 0]])
-        elif self.name == "CZ":
+        elif self.name == "cz":
             return np.array([[1, 0, 0, 0],
                              [0, 1, 0, 0],
                              [0, 0, 1, 0],
                              [0, 0, 0, -1]])
-        elif self.name == "H":
+        elif self.name == "h":
             return np.array([[1, 1],
                             [1, -1]])/np.sqrt(2)
-        elif self.name == "S":
+        elif self.name == "s":
             return np.array([[1, 0],
                             [0, 1.0j]])
-        elif self.name == "SDAG" or self.name == "SDG":
+        elif self.name == "sdg":
             return np.array([[1, 0],
                             [0, -1.0j]])
-        elif self.name == "SQRTX":
+        elif self.name == "sx":
             return np.array([[0.5 + 0.5j, 0.5 - 0.5j],
                             [0.5 - 0.5j, 0.5 + 0.5j]])
-        elif self.name == "SQRTXDAG":
+        elif self.name == "sxdg":
             return np.array([[0.5 - 0.5j, 0.5 + 0.5j],
                             [0.5 + 0.5j, 0.5 - 0.5j]])
 
@@ -103,16 +106,37 @@ class Circuit:
         return stim_circuit
     
     def to_qiskit_circuit(self) -> QuantumCircuit:
-        """Convert the CNOT circuit to a qiskit.QuantumCircuit.
-
-        Args:
-            remove_resets: If set to `True`, removes resets in the |0> state from the circuit.
+        """Convert the circuit to a qiskit.QuantumCircuit.
 
         Returns:
-            A qiskit.QuantumCircuit representation of the CNOT circuit.
+            A qiskit.QuantumCircuit representation of the circuit.
         """
-        circ = QuantumCircuit.from_qasm_str(self.to_stim_circuit().to_qasm(open_qasm_version=2))
-        return circ
+        qiskit_circuit = QuantumCircuit(self.num_qubits())
+
+        # Add gates
+        for gate in self.gates:
+            if gate.name == "cnot" or gate.name == "cx":
+                qiskit_circuit.cx(gate.qubits[0], gate.qubits[1])
+            elif gate.name == "cz":
+                qiskit_circuit.cz(gate.qubits[0], gate.qubits[1])
+            elif gate.name == "h":
+                qiskit_circuit.h(gate.qubits[0])
+            elif gate.name == "s":
+                qiskit_circuit.s(gate.qubits[0])
+            elif gate.name == "sdg":
+                qiskit_circuit.sdg(gate.qubits[0])
+            elif gate.name == "sx":
+                qiskit_circuit.sx(gate.qubits[0])
+            elif gate.name == "sxdg":
+                qiskit_circuit.sxdg(gate.qubits[0])
+            elif gate.name == "x":
+                qiskit_circuit.x(gate.qubits[0])
+            elif gate.name == "y":
+                qiskit_circuit.y(gate.qubits[0])
+            elif gate.name == "z":
+                qiskit_circuit.z(gate.qubits[0])
+
+        return qiskit_circuit
     
     @classmethod
     def from_qiskit_circuit(cls, qiskit_circuit: QuantumCircuit) -> Circuit:
@@ -196,13 +220,38 @@ class Circuit:
         circ = cls.from_stim_circuit(stim_circuit)
         return circ
 
+    @classmethod
+    def from_stabilizers_qiskit(cls, stabilizers: np.ndarray) -> Circuit:
+        """Convert a list of stabilizers to a circuit using qiskit.
+        
+        Args:
+            stabilizers: The list of stabilizers in symplectic format.
+            
+        Returns:
+            A circuit representation of the stabilizers."""
+        
+        string_stabs = stabs_symplectic_to_str(stabilizers)
+
+        qiskit_circuit = synthesis.synth_circuit_from_stabilizers(string_stabs, allow_underconstrained=True, allow_redundant=True)
+
+        qiskit_circuit = compiler.transpile(
+            qiskit_circuit,
+            basis_gates=list(BASIS_GATES),
+            optimization_level=2,
+            routing_method=None
+        )
+
+        circuit = cls.from_qiskit_circuit(qiskit_circuit)
+
+        return circuit
+
     def get_stabilizers(self) -> np.ndarray:
         """Get the stabilizers of the circuit in symplectic format.
         
         Returns:
             A list of stabilizers in symplectic format.
         """
-        
+        # TODO: test get_stabilizers with new method from_stabilizers_qiskit
         c = self.to_stim_circuit()
 
         tableau = c.to_tableau()

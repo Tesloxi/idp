@@ -50,9 +50,9 @@ def test_to_stim_circuit():
 def test_to_qiskit_circuit():
     """Test conversion to Qiskit circuit."""
     c = Circuit()
-    c.add_gate(Gate("H", [0]))
-    c.add_gate(Gate("CNOT", [0, 1]))
-    c.add_gate(Gate("S", [1]))
+    c.add_gate(Gate("h", [0]))
+    c.add_gate(Gate("cx", [0, 1]))
+    c.add_gate(Gate("s", [1]))
     qiskit_circuit = c.to_qiskit_circuit()
 
     expected_qiskit_circuit = QuantumCircuit(2)
@@ -61,6 +61,8 @@ def test_to_qiskit_circuit():
     expected_qiskit_circuit.s(1)
     assert isinstance(qiskit_circuit, QuantumCircuit)
     assert qiskit_circuit == expected_qiskit_circuit, "Qiskit circuit conversion failed."
+
+test_to_qiskit_circuit()
 
 def test_stabs_conversion():
     """Test conversion between stabilizer representations."""
