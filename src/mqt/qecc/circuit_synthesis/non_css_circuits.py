@@ -292,7 +292,7 @@ def compose_circuit(circ1: Circuit, circ2: Circuit, wiring: dict[int, int] | Non
 
     return Circuit.from_stim_circuit(composed), mapping1, mapping2
 
-def stabs_symplectic_to_str(stabs: np.ndarray) -> list[str]:
+def stabs_symplectic_to_str(stabs: np.ndarray[np.int8]) -> list[str]:
     """Convert a list of stabilizers in symplectic format to a list of strings.
 
     Args:

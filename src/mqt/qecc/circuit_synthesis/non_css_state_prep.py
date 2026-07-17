@@ -75,23 +75,6 @@ class NCSSFaultyStatePrepCircuit:
 
         return fs
 
-    def check_fault_set(self) -> bool:
-        """Check that every fault in the fault set anti-commutes with one stabilizer of the code"""
-        correct = True
-
-        fs = self.fault_sets[-1] 
-
-        for f in fs.faults:
-            anticommutes = False
-            for stab in self.stabs:
-                if odd_overlap(f, stab): # TODO: fix odd_overlap
-                    anticommutes = True
-                    break
-            if not anticommutes:
-                return False
-        
-        return True
-
 
 def gate_optimal_verification_stabilizers(
     fault_sets: list[FaultSet],
@@ -207,7 +190,7 @@ def all_gate_optimal_verification_stabilizers(
             logger.info(f"No verification stabilizers found for {layer + 1} errors")
             return []  # No solution found
         
-        logger.info(f"Found verification stabilizers for {layer + 1} errors with {num_cnots} CNOTs")
+        logger.info(f"Found verification stabilizers for {layer + 1} errors with {curr_cost} cost.")
         # If any measurements are unused we can reduce the number of ancillas at least by that
         measurements = [m for m in measurements if np.any(m)]
         num_anc = len(measurements)
@@ -331,6 +314,8 @@ def all_verification_stabilizers(
     # Convert each boolean vector to actual stabilizer:
     # measurement_stabs[anc] = XOR of selected generators   
 
+    logger.info(f"Adding constraints to the solver")
+
     solver = z3.Solver()
     # Assert that each error is detected
     solver.add(z3.And([
@@ -358,6 +343,8 @@ def all_verification_stabilizers(
 
     solver.add(z3.PbLe(weighted_terms, max_cost))
 
+    logger.info(f"Starting search for verification stabilizers")
+    print(f"Starting search for verification stabilizers")
 
     solutions = []
     while solver.check() == z3.sat:
@@ -368,7 +355,7 @@ def all_verification_stabilizers(
             v = np.zeros(n_qubits, dtype=np.int8)
             for g in range(n_generators):
                 if model[m[g]]:
-                    v += stabilizers[g]
+                    v += stabilizers[g] #TODO: fix error happening here
             actual_measurements.append(v % 2)
         if not return_all_solutions:
             return [actual_measurements]
@@ -380,15 +367,15 @@ def all_verification_stabilizers(
     
     return None   
 
-def odd_overlap(v_sym: np.ndarray[np.int8], v_con: np.ndarray[np.int8]) -> z3.BoolRef:
+def odd_overlap(v_sym: np.ndarray[np.bool_], v_con: np.ndarray[np.int8]) -> z3.BoolRef:
     """Return True if anticommutation is odd."""
     if np.array_equal(v_con, np.zeros(len(v_con), dtype=np.int8)):
         return z3.BoolVal(False)
     #TODO: fix odd_overlap
     # Symplectic: a·b' + b·a' where [a,b] = v_sym, [a',b'] = v_con
     n = len(v_con) // 2
-    a = [bool(x) for x in v_sym[:n]]
-    b = [bool(x) for x in v_sym[n:]]
+    a = v_sym[:n]
+    b = v_sym[n:]
     a_con = v_con[:n]
     b_con = v_con[n:]
     

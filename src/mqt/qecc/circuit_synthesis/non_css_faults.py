@@ -452,6 +452,22 @@ class FaultSet:
         self.remove_zero_rows()
         self.remove_duplicates()
 
+    def remove_logical_errors(self, stabs: np.ndarray[np.int8]):
+        """Remove logical errors from the fault set as they would not be detectable by any stabilizer measurement."""
+        new_faults = []
+        for f in self.faults:
+            fx = f[self.num_qubits:]
+            fz = f[:self.num_qubits]
+            for stab in stabs:
+                sx = stab[self.num_qubits:]
+                sz = stab[:self.num_qubits]
+                if (fx.T @ sz + fz.T @ sx) % 2 == 1:
+                    new_faults.append(f)
+                    break
+            
+        self.faults = np.array(new_faults)
+        
+
     def to_set(self) -> set[tuple[int, ...]]:
         """Convert the fault set to a set of tuples for easier comparison."""
         return set(map(tuple, self.faults))
@@ -504,6 +520,7 @@ class FaultSet:
         """
         self.remove_equivalent(stabs)
         self.faults_to_coset_leaders(stabs)
+        self.remove_logical_errors(stabs)
 
         if len(self.faults) == 0:
             return
@@ -524,6 +541,21 @@ class FaultSet:
         new_fault_set = FaultSet(self.num_qubits)
         new_fault_set.faults = np.copy(self.faults)
         return new_fault_set
+
+    def __repr__(self) -> str:
+        """Return a string representation of the fault set."""
+        return f"FaultSet(num_qubits={self.num_qubits}, faults=\n{self.faults})"
+    
+    def __len__(self) -> int:
+        """Return the number of faults in the fault set."""
+        return len(self.faults)
+    
+    def __getitem__(self, index: int) -> np.ndarray[np.int8]:
+        """Return the fault at the specified index."""
+        return self.faults[index]
+
+    def __iter__(self) -> Iterator[np.ndarray[np.int8]]:
+        return iter(self.faults)
 
 def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) -> np.ndarray[np.int8]:
     """Compute the coset leader of a fault given a set of stabilizer generators
