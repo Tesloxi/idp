@@ -102,3 +102,24 @@ def test_remove_equivalent(request, stabs_fixture, initial_faults, expected_faul
     assert fault_set.to_set() == set(map(tuple, expected_faults)), (
         "Fault set was not reduced to unique coset representatives correctly."
     )
+
+def test_filter_by_weight_basic():
+    """Test filtering faults by weeight with a simple """
+    stabs = np.array([]) #TODO: write stabs
+    fault_set = FaultSet(num_qubits=3)
+    fault_set.add_fault(np.array([1, 1, 0, 0, 0, 0], dtype=np.int8))
+    fault_set.add_fault(np.array([1, 1, 0, 0, 1, 0], dtype=np.int8))
+    fault_set.add_fault(np.array([1, 0, 0, 1, 0, 0], dtype=np.int8))
+    fault_set.add_fault(np.array([0, 1, 0, 0, 0, 0], dtype=np.int8))
+
+    # Filter faults with weight >= 2
+    fault_set.filter_by_weight_at_least(2, stabs)
+
+    # Expected faults after filtering
+    expected_faults = FaultSet(num_qubits=3)
+    expected_faults.add_fault(np.array([1, 1, 0, 0, 0, 0], dtype=np.int8))
+    expected_faults.add_fault(np.array([1, 1, 0, 0, 1, 0], dtype=np.int8))
+
+    assert np.array_equal(fault_set.faults, expected_faults.faults), "Faults were not filtered correctly by weight."
+
+test_filter_by_weight_basic()

@@ -75,6 +75,24 @@ class NCSSFaultyStatePrepCircuit:
 
         return fs
 
+    def check_fault_set(self) -> bool:
+        """Check that every fault in the fault set anti-commutes with one stabilizer of the code"""
+        correct = True
+
+        fs = self.fault_sets[-1] 
+
+        for f in fs.faults:
+            anticommutes = False
+            for stab in self.stabs:
+                if odd_overlap(f, stab): # TODO: fix odd_overlap
+                    anticommutes = True
+                    break
+            if not anticommutes:
+                return False
+        
+        return True
+
+
 def gate_optimal_verification_stabilizers(
     fault_sets: list[FaultSet],
     stabs: np.ndarray[np.int8],
@@ -362,15 +380,15 @@ def all_verification_stabilizers(
     
     return None   
 
-def odd_overlap(v_sym: np.ndarray[np.bool_], v_con: np.ndarray[np.int8]) -> z3.BoolRef:
+def odd_overlap(v_sym: np.ndarray[np.int8], v_con: np.ndarray[np.int8]) -> z3.BoolRef:
     """Return True if anticommutation is odd."""
     if np.array_equal(v_con, np.zeros(len(v_con), dtype=np.int8)):
         return z3.BoolVal(False)
-    
+    #TODO: fix odd_overlap
     # Symplectic: a·b' + b·a' where [a,b] = v_sym, [a',b'] = v_con
     n = len(v_con) // 2
-    a = v_sym[:n]
-    b = v_sym[n:]
+    a = [bool(x) for x in v_sym[:n]]
+    b = [bool(x) for x in v_sym[n:]]
     a_con = v_con[:n]
     b_con = v_con[n:]
     

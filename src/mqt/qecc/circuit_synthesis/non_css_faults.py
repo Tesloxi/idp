@@ -253,7 +253,6 @@ class FaultSet:
         
         Args:
             circ: The circuit to generate faults from.
-            reduce: Reduce faults by stabilizers induced by the circuit.
 
         Returns:
             A FaultSet containing the faults generated from the circuit.
@@ -509,7 +508,10 @@ class FaultSet:
         if len(self.faults) == 0:
             return
         # filter remaining faults by weight
-        weights = np.sum(self.faults, axis=1)
+        weights = []
+        for f in self.faults:
+            weights.append(np.sum(f[:self.num_qubits] | f[self.num_qubits:]))
+        weights = np.array(weights)
         mask = weights >= w
         self.faults = self.faults[mask]
 

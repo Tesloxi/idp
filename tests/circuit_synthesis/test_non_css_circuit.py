@@ -62,8 +62,6 @@ def test_to_qiskit_circuit():
     assert isinstance(qiskit_circuit, QuantumCircuit)
     assert qiskit_circuit == expected_qiskit_circuit, "Qiskit circuit conversion failed."
 
-test_to_qiskit_circuit()
-
 def test_stabs_conversion():
     """Test conversion between stabilizer representations."""
     stabs = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
