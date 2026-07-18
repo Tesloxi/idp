@@ -417,6 +417,9 @@ class FaultSet:
         if stabs.ndim != 2:
             msg = "Stabilizer matrix must be 2-dimensional."
             raise ValueError(msg)
+        if stabs.shape[0] == 0:
+            # If stabilizer matrix is empty, no faults can be removed
+            return
         rref, _, _, pivots = row_echelon(stabs, full=True)
         # Reduce all faults to their coset representatives
         for i, fault in enumerate(self.faults):
@@ -454,6 +457,9 @@ class FaultSet:
 
     def remove_logical_errors(self, stabs: np.ndarray[np.int8]):
         """Remove logical errors from the fault set as they would not be detectable by any stabilizer measurement."""
+        if stabs.shape[0] == 0:
+            return
+        
         new_faults = []
         for f in self.faults:
             fx = f[self.num_qubits:]
@@ -467,30 +473,9 @@ class FaultSet:
             
         self.faults = np.array(new_faults)
         
-
     def to_set(self) -> set[tuple[int, ...]]:
         """Convert the fault set to a set of tuples for easier comparison."""
         return set(map(tuple, self.faults))
-
-    def make_fault_set_readable(self) -> list[str]:
-        """Return a human-readable representation of the faults in the fault set.
-        
-        e.g. [1, 0, 1, 0, 0, 1] -> X1 I2 Y3
-        """
-        readable_faults = []
-        for fault in self.faults:
-            fault_str = ""
-            for i in range(self.num_qubits):
-                if fault[i] == 1 and fault[i+self.num_qubits] == 1:
-                    fault_str += f"Y{i} "
-                elif fault[i] == 1 and fault[i+self.num_qubits] == 0:
-                    fault_str += f"X{i} "
-                elif fault[i] == 0 and fault[i+self.num_qubits] == 1:
-                    fault_str += f"Z{i} "
-                else:
-                    fault_str += f"I{i} "
-            readable_faults.append(fault_str.strip())
-        return readable_faults
 
     def faults_to_coset_leaders(self, generators: np.ndarray[np.int8]) -> None:
         """Map all faults in the set to their coset leaders with respect to the stabilizer generators.
@@ -541,6 +526,21 @@ class FaultSet:
         new_fault_set = FaultSet(self.num_qubits)
         new_fault_set.faults = np.copy(self.faults)
         return new_fault_set
+
+    def __eq__(self, other: object) -> bool:
+        """Check equality of two FaultSet objects.
+        Two FaultSet objects are considered equal if they have the same number of qubits
+        and contain the same faults. This check does not factor in stabilizer equivalence or coset leaders.
+
+        Args:
+            other: Another FaultSet object to compare with.
+
+        Returns:
+            True if both FaultSet objects are equal, False otherwise.
+        """
+        if not isinstance(other, FaultSet):
+            return False
+        return self.num_qubits == other.num_qubits and self.to_set() == other.to_set()
 
     def __repr__(self) -> str:
         """Return a string representation of the fault set."""
@@ -605,6 +605,7 @@ def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) ->
     return result
 
 def product_fault_set(lhs: FaultSet, rhs: FaultSet) -> FaultSet:
+
     """Generate fault set by forming the product of all faults of two fault sets.
     
     Args: 
@@ -627,3 +628,27 @@ def product_fault_set(lhs: FaultSet, rhs: FaultSet) -> FaultSet:
     new_faults = np.array(new_faults)
 
     return FaultSet.from_fault_array(new_faults)
+
+def stabilizer_equivalent(lhs: FaultSet, rhs: FaultSet, stabs: np.ndarray[np.int8] | None) -> bool:
+    """Check if two fault sets are equivalent with respect to a stabilizer group.
+    
+    Args:
+        lhs: The first fault set.
+        rhs: The second fault set.
+        stabs (optional): A 2D numpy array where each row is a stabilizer generator.
+
+    Returns:
+        True if the two fault sets are equivalent with respect to the stabilizer group, False otherwise.    
+    """
+    if lhs.num_qubits != rhs.num_qubits:
+        msg = "Fault sets must have the same number of qubits to compare."
+        raise ValueError(msg)
+    
+    lhs_copy = lhs.copy()
+    rhs_copy = rhs.copy()
+
+    if stabs is not None:
+        lhs_copy.normalize(stabs)
+        rhs_copy.normalize(stabs)
+
+    return lhs_copy == rhs_copy

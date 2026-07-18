@@ -352,10 +352,10 @@ def all_verification_stabilizers(
         # Extract stabilizer measurements from model
         actual_measurements = []
         for m in measurement_vars:
-            v = np.zeros(n_qubits, dtype=np.int8)
+            v = np.zeros(2*n_qubits, dtype=np.int8)
             for g in range(n_generators):
                 if model[m[g]]:
-                    v += stabilizers[g] #TODO: fix error happening here
+                    v += stabilizers[g] 
             actual_measurements.append(v % 2)
         if not return_all_solutions:
             return [actual_measurements]
@@ -371,7 +371,6 @@ def odd_overlap(v_sym: np.ndarray[np.bool_], v_con: np.ndarray[np.int8]) -> z3.B
     """Return True if anticommutation is odd."""
     if np.array_equal(v_con, np.zeros(len(v_con), dtype=np.int8)):
         return z3.BoolVal(False)
-    #TODO: fix odd_overlap
     # Symplectic: a·b' + b·a' where [a,b] = v_sym, [a',b'] = v_con
     n = len(v_con) // 2
     a = v_sym[:n]
