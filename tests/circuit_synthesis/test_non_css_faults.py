@@ -71,6 +71,38 @@ def test_from_fault_array():
     # Check that the rows in the result match the expected rows, regardless of order
     assert set(map(tuple, result_array)) == set(map(tuple, fault_array)), "Fault set was not created correctly from the array."
 
+def test_product_fault_set():
+    """Test multiplying two fault sets."""
+    fault_set_1 = FaultSet.from_fault_array(np.array([
+        [0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+        [0, 0, 0, 0, 0, 1, 0, 0, 0, 1],
+        [0, 0, 0, 0, 1, 0, 0, 1, 0, 0],
+        [0, 0, 0, 0, 1, 0, 0, 1, 0, 1],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0, 1, 1, 0],
+        [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 1, 0, 0, 0, 1, 0],
+        [0, 0, 1, 0, 0, 0, 0, 1, 0, 1],
+        [0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 1, 0, 1, 0, 0],
+        [0, 0, 1, 1, 0, 0, 0, 0, 1, 0],
+        [0, 1, 0, 0, 0, 0, 0, 1, 0, 0],
+        [0, 1, 0, 0, 0, 0, 1, 1, 0, 0],
+        [1, 0, 0, 0, 0, 1, 0, 1, 0, 0],
+        [1, 0, 0, 0, 1, 1, 0, 0, 0, 1],
+        [1, 0, 1, 0, 0, 0, 0, 1, 0, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    ]))
+
+    product = product_fault_set(fault_set_1, fault_set_1)
+
+    print(len(product))
+
+test_product_fault_set()
+
+
 @pytest.mark.parametrize(
         ("stabs_fixture", "initial_faults", "expected_faults"),
         [

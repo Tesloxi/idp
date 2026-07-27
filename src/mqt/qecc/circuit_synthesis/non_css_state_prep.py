@@ -5,13 +5,26 @@ from __future__ import annotations
 import numpy as np
 import z3
 import logging
+from typing import TYPE_CHECKING
 
 from mqt.qecc.circuit_synthesis.non_css_faults import FaultSet, coset_leader, product_fault_set
-from mqt.qecc.circuit_synthesis.non_css_circuits import Circuit
-from .synthesis_utils import vars_to_stab, iterative_search_with_timeout, run_with_timeout
+from mqt.qecc.circuit_synthesis.non_css_circuits import Circuit, stabs_symplectic_to_str
+from .synthesis_utils import (
+    vars_to_stab,
+    iterative_search_with_timeout, 
+    run_with_timeout,
+    measure_one_flagged
+)
+from .non_css_synthesis_utils import (
+    odd_overlap,
+)
 
+from qiskit import QuantumCircuit, AncillaRegister, ClassicalRegister, QuantumRegister
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 class NCSSFaultyStatePrepCircuit:
     """Represents a state preparation circuit for a non-CSS code."""
@@ -56,9 +69,11 @@ class NCSSFaultyStatePrepCircuit:
             raise ValueError(msg)
         elif num_errors == 1:
             logger.info("Computing fault set for 1 error.")
+            print("Computing fault set for 1 error.")
             fs = FaultSet.from_circuit(self.circ)
         else:
             logger.info(f"Computing fault set for {num_errors} errors.")
+            # print(f"Computing fault set for {num_errors} errors.")
             self.compute_fault_set(num_errors - 1)
             faults = fault_sets[num_errors - 2]
             single_faults = fault_sets_unreduced[0]
@@ -161,6 +176,7 @@ def all_gate_optimal_verification_stabilizers(
     # Find the optimal circuit for every number of errors int the preparation circuit
     for layer in range(n_layers):
         logger.info(f"Finding verification stabilizers for {layer + 1} errors")
+        print(f"Finding verification stabilizers for {layer + 1} errors")
         faults = fault_sets[layer]
 
         if len(faults) == 0:
@@ -175,11 +191,18 @@ def all_gate_optimal_verification_stabilizers(
         max_cost = max_row_cost * num_anc
 
         logger.info(f"Finding verification stabilizers for {layer + 1} errors with cost {min_cost}..{max_cost} using {num_anc} ancillas")
+        print(f"Finding verification stabilizers for {layer + 1} errors with cost {min_cost}..{max_cost} using {num_anc} ancillas")
 
         def fun(cost_budget: int) -> list[np.ndarray[np.int8]] | None:
             return verification_stabilizers(faults, stabs, num_anc, cost_budget, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
         
-        res = iterative_search_with_timeout(fun, min_cost, max_cost, min_timeout, max_timeout)
+        res = iterative_search_with_timeout(
+            fun,
+            min_cost,
+            max_cost,
+            min_timeout,
+            max_timeout
+        )
 
         if res is not None:
             measurements, curr_cost = res
@@ -191,17 +214,20 @@ def all_gate_optimal_verification_stabilizers(
             return []  # No solution found
         
         logger.info(f"Found verification stabilizers for {layer + 1} errors with {curr_cost} cost.")
+        print(f"Found verification stabilizers for {layer + 1} errors with {curr_cost} cost.")
         # If any measurements are unused we can reduce the number of ancillas at least by that
         measurements = [m for m in measurements if np.any(m)]
         num_anc = len(measurements)
         # Iterate backwards to find the minimal number of cnots
-        logger.info(f"Finding minimal number of CNOTs for {layer + 1} errors")
+        logger.info(f"Finding minimal cost for {layer + 1} errors")
+        print(f"Finding minimal cost for {layer + 1} errors")
 
         def search_cost(cost_budget: int) -> list[np.ndarray[np.int8]] | None:
             return verification_stabilizers(faults, stabs, num_anc, cost_budget, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
         
         while curr_cost - 1 > 0:
             logger.info(f"Trying cost {curr_cost-1}")
+            print(f"Trying cost {curr_cost-1}")
             cost_opt = run_with_timeout(search_cost, curr_cost-1, timeout=max_timeout)
 
             if cost_opt and not isinstance(cost_opt, str):
@@ -211,11 +237,14 @@ def all_gate_optimal_verification_stabilizers(
                 break
         
         logger.info(f"Minimal cost for {layer+1} errors is: {curr_cost}")
+        print(f"Minimal cost for {layer+1} errors is: {curr_cost}")
 
         # If the cost is minimal, we can reduce the number of ancillas
         logger.info(f"Finding minimal number of ancillas for {layer + 1} errors")
+        print(f"Finding minimal number of ancillas for {layer + 1} errors")
         while num_anc - 1 > 0:
             logger.info(f"Trying {num_anc - 1} ancillas")
+            print(f"Trying {num_anc - 1} ancillas")
 
             def search_anc(num_anc: int) -> list[np.ndarray[np.int8]] | None:
                 return verification_stabilizers(faults, stabs, num_anc, curr_cost, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
@@ -229,6 +258,7 @@ def all_gate_optimal_verification_stabilizers(
                 break
             
         logger.info(f"Minimal number of ancillas for {layer + 1} errors is: {num_anc}")
+        print(f"Minimal number of ancillas for {layer + 1} errors is: {num_anc}")
 
         if not return_all_solutions:
             layers[layer] = [measurements]
@@ -239,6 +269,137 @@ def all_gate_optimal_verification_stabilizers(
                 logger.info(f"Found {len(layers[layer])} equivalent solutions for {layer} errors")
     return layers
 
+def gate_optimal_verification_circuit(
+    sp_circ: NCSSFaultyStatePrepCircuit,
+    min_timeout: int = 1,
+    max_timeout: int = 3600,
+    max_ancillas: int | None = None,
+    flag: bool = False
+) -> QuantumCircuit:
+    """Return a verified state preparation circuit.
+
+    The verification circuit is a set of stabilizers such that each propagated error in sp_circ anticommutes with some verification stabilizer.
+
+    The method uses an iterative search to find the optimal set of stabilizers by repeatedly computing the optimal circuit for each number of ancillas and gate cost. 
+    This is repeated for each number of independent correctable errors in the state preparation circuit. 
+    Thus the verification circuit is constructed of multiple "layers" of stabilizers, each layer corresponding to a fault set it verifies.
+
+    Args:
+        sp_circ: The state preparation circuit to verify.
+        min_timeout: The minimum time to allow each search to run for.
+        max_timeout: The maximum time to allow each search to run for.
+        max_ancillas: The maximum number of ancillas to allow in each layer verification circuit.
+        flag_first_layer: If True, the first verification layer will also be flagged. If False, the potential hook errors introduced by the first layer will be caught by the second layer. This is only relevant if full_fault_tolerance is True.
+
+    Returns:
+        QuantumCircuit combining the state preparation and verification circuit.
+    """
+
+    def verification_stabs_fun(
+        fault_sets: list[FaultSet],
+        stabs: np.ndarray[np.int8]
+    ) -> list[list[np.ndarray[np.int8]]]:
+        return gate_optimal_verification_stabilizers(fault_sets, stabs, min_timeout, max_timeout, max_ancillas)
+    
+    return _verification_circuit(
+        sp_circ,
+        verification_stabs_fun,
+        flag=flag
+    )
+
+def _verification_circuit(
+    sp_circ: NCSSFaultyStatePrepCircuit,
+    verification_stabs_fun: Callable[[list[FaultSet], np.ndarray[np.int8]], list[list[np.ndarray[np.int8]]]],
+    flag: bool = False
+) -> QuantumCircuit:
+    """Build a verification circuit for a non-CSS state preparation circuit."""
+    
+    logger.info("Finding verification stabilizers for the state preparation circuit.")
+    print("Finding verification stabilizers for the state preparation circuit.")
+
+    sp_circ.compute_fault_set()
+    
+    fault_sets = sp_circ.fault_sets
+    stabs = sp_circ.stabs
+
+    # Find verification stabilizers for each layer
+    layers = verification_stabs_fun(fault_sets, stabs) # Each layer is a list of symplectic stabilizers
+
+    measurements = [measurement for layer in layers for measurement in layer]
+
+    print(stabs_symplectic_to_str(measurements))
+
+    return _measure_non_css_stabs(
+        sp_circ,
+        np.asarray(measurements, dtype=np.int8),
+        flag=flag
+    )
+
+def _measure_ft_pauli(
+    qc: QuantumCircuit,
+    stab: np.ndarray[np.int8],
+    anc: AncillaRegister,
+    cbit: ClassicalRegister,
+    flag: bool = False,
+) -> None:
+    """Measure one non-CSS stabilizer with a flagged Pauli measurement."""
+    if flag:
+        measure_one_flagged(qc, stab, anc[0], cbit[0])
+    else:
+        n = stab.shape[0] // 2
+        x = stab[:n]
+        z = stab[n:]
+
+        support = []
+        for q in range(n):
+            if x[q] == 0 and z[q] == 0:
+                continue
+
+            support.append(q)
+
+            # Basis change to map the local Pauli to Z
+            if x[q] == 1 and z[q] == 0:      # X
+                qc.h(q)
+            elif x[q] == 0 and z[q] == 1:    # Z
+                pass
+            elif x[q] == 1 and z[q] == 1:    # Y
+                qc.sdg(q)
+                qc.h(q)
+
+        # Measure Z-parity onto ancilla
+        qc.reset(anc)
+        qc.h(anc)
+        for q in support:
+            qc.cx(q, anc)
+        qc.h(anc)
+        qc.measure(anc, cbit)
+
+        # Undo basis change
+        for q in reversed(range(n)):
+            if x[q] == 1 and z[q] == 0:
+                qc.h(q)
+            elif x[q] == 1 and z[q] == 1:
+                qc.h(q)
+                qc.s(q)
+
+def _measure_non_css_stabs(
+    sp_circ: NCSSFaultyStatePrepCircuit,
+    measurements: np.ndarray[np.int8],
+    flag: bool = False
+) -> QuantumCircuit:
+    # Create the verification circuit
+    q = QuantumRegister(sp_circ.num_qubits, "q")
+    measured_circ = QuantumCircuit(q)
+    measured_circ.compose(sp_circ.circ.to_qiskit_circuit(), inplace=True)
+
+    for i, stab in enumerate(measurements):
+        anc = AncillaRegister(1, f"anc_{i}")
+        c = ClassicalRegister(1, f"c_{i}")
+        measured_circ.add_register(anc)
+        measured_circ.add_register(c)
+        _measure_ft_pauli(measured_circ, stab, anc, c, flag)
+
+    return measured_circ
 
 def verification_stabilizers(
         fault_set: FaultSet,
@@ -344,7 +505,6 @@ def all_verification_stabilizers(
     solver.add(z3.PbLe(weighted_terms, max_cost))
 
     logger.info(f"Starting search for verification stabilizers")
-    print(f"Starting search for verification stabilizers")
 
     solutions = []
     while solver.check() == z3.sat:
@@ -367,27 +527,25 @@ def all_verification_stabilizers(
     
     return None   
 
-def odd_overlap(v_sym: np.ndarray[np.bool_], v_con: np.ndarray[np.int8]) -> z3.BoolRef:
-    """Return True if anticommutation is odd."""
-    if np.array_equal(v_con, np.zeros(len(v_con), dtype=np.int8)):
-        return z3.BoolVal(False)
-    # Symplectic: a·b' + b·a' where [a,b] = v_sym, [a',b'] = v_con
-    n = len(v_con) // 2
-    a = v_sym[:n]
-    b = v_sym[n:]
-    a_con = v_con[:n]
-    b_con = v_con[n:]
-    
-    # a · b_con
-    term1 = False
-    for i in range(n):
-        if b_con[i] == 1:
-            term1 = z3.Xor(term1, a[i])
-    
-    # b · a_con
-    term2 = False
-    for i in range(n):
-        if a_con[i] == 1:
-            term2 = z3.Xor(term2, b[i])
-    
-    return z3.Xor(term1, term2)
+def get_hook_errors(measurements: list[np.ndarray[np.int8]]) -> FaultSet:
+    """Return hook errors for non-CSS Pauli stabilizer measurements in symplectic form.
+        Assuming CNOTs are executed in ascending order of qubit index.
+    """
+    errors = []
+    n = len(measurements[0]) // 2
+    for stab in measurements:
+        x = stab[:n]
+        z = stab[n:]
+
+        support = [q for q in range(n) if x[q] == 1 or z[q] == 1]
+        error = stab.copy()
+
+        for qubit in support[:-1]:
+            error[qubit] = 0
+            error[qubit + n] = 0
+            errors.append(error.copy())
+
+    if len(errors) == 0:
+        return FaultSet(n)
+
+    return FaultSet.from_fault_array(np.array(errors))
