@@ -13,10 +13,10 @@ from .synthesis_utils import (
     vars_to_stab,
     iterative_search_with_timeout, 
     run_with_timeout,
-    measure_one_flagged
 )
 from .non_css_synthesis_utils import (
     odd_overlap,
+    measure_one_flagged,
 )
 
 from qiskit import QuantumCircuit, AncillaRegister, ClassicalRegister, QuantumRegister
@@ -69,11 +69,9 @@ class NCSSFaultyStatePrepCircuit:
             raise ValueError(msg)
         elif num_errors == 1:
             logger.info("Computing fault set for 1 error.")
-            print("Computing fault set for 1 error.")
             fs = FaultSet.from_circuit(self.circ)
         else:
             logger.info(f"Computing fault set for {num_errors} errors.")
-            # print(f"Computing fault set for {num_errors} errors.")
             self.compute_fault_set(num_errors - 1)
             faults = fault_sets[num_errors - 2]
             single_faults = fault_sets_unreduced[0]
@@ -176,7 +174,6 @@ def all_gate_optimal_verification_stabilizers(
     # Find the optimal circuit for every number of errors int the preparation circuit
     for layer in range(n_layers):
         logger.info(f"Finding verification stabilizers for {layer + 1} errors")
-        print(f"Finding verification stabilizers for {layer + 1} errors")
         faults = fault_sets[layer]
 
         if len(faults) == 0:
@@ -190,8 +187,7 @@ def all_gate_optimal_verification_stabilizers(
         min_cost = max(1, min_row_cost)
         max_cost = max_row_cost * num_anc
 
-        logger.info(f"Finding verification stabilizers for {layer + 1} errors with cost {min_cost}..{max_cost} using {num_anc} ancillas")
-        print(f"Finding verification stabilizers for {layer + 1} errors with cost {min_cost}..{max_cost} using {num_anc} ancillas")
+        logger.info(f"Finding verification stabilizers for {layer + 1} errors with cost in [{min_cost},{max_cost}] using {num_anc} ancillas")
 
         def fun(cost_budget: int) -> list[np.ndarray[np.int8]] | None:
             return verification_stabilizers(faults, stabs, num_anc, cost_budget, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
@@ -214,20 +210,17 @@ def all_gate_optimal_verification_stabilizers(
             return []  # No solution found
         
         logger.info(f"Found verification stabilizers for {layer + 1} errors with {curr_cost} cost.")
-        print(f"Found verification stabilizers for {layer + 1} errors with {curr_cost} cost.")
         # If any measurements are unused we can reduce the number of ancillas at least by that
         measurements = [m for m in measurements if np.any(m)]
         num_anc = len(measurements)
         # Iterate backwards to find the minimal number of cnots
         logger.info(f"Finding minimal cost for {layer + 1} errors")
-        print(f"Finding minimal cost for {layer + 1} errors")
 
         def search_cost(cost_budget: int) -> list[np.ndarray[np.int8]] | None:
             return verification_stabilizers(faults, stabs, num_anc, cost_budget, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
         
         while curr_cost - 1 > 0:
             logger.info(f"Trying cost {curr_cost-1}")
-            print(f"Trying cost {curr_cost-1}")
             cost_opt = run_with_timeout(search_cost, curr_cost-1, timeout=max_timeout)
 
             if cost_opt and not isinstance(cost_opt, str):
@@ -237,14 +230,11 @@ def all_gate_optimal_verification_stabilizers(
                 break
         
         logger.info(f"Minimal cost for {layer+1} errors is: {curr_cost}")
-        print(f"Minimal cost for {layer+1} errors is: {curr_cost}")
 
         # If the cost is minimal, we can reduce the number of ancillas
         logger.info(f"Finding minimal number of ancillas for {layer + 1} errors")
-        print(f"Finding minimal number of ancillas for {layer + 1} errors")
         while num_anc - 1 > 0:
             logger.info(f"Trying {num_anc - 1} ancillas")
-            print(f"Trying {num_anc - 1} ancillas")
 
             def search_anc(num_anc: int) -> list[np.ndarray[np.int8]] | None:
                 return verification_stabilizers(faults, stabs, num_anc, curr_cost, weight_x=weight_x, weight_y=weight_y, weight_z=weight_z)
@@ -258,7 +248,6 @@ def all_gate_optimal_verification_stabilizers(
                 break
             
         logger.info(f"Minimal number of ancillas for {layer + 1} errors is: {num_anc}")
-        print(f"Minimal number of ancillas for {layer + 1} errors is: {num_anc}")
 
         if not return_all_solutions:
             layers[layer] = [measurements]
@@ -289,7 +278,7 @@ def gate_optimal_verification_circuit(
         min_timeout: The minimum time to allow each search to run for.
         max_timeout: The maximum time to allow each search to run for.
         max_ancillas: The maximum number of ancillas to allow in each layer verification circuit.
-        flag_first_layer: If True, the first verification layer will also be flagged. If False, the potential hook errors introduced by the first layer will be caught by the second layer. This is only relevant if full_fault_tolerance is True.
+        flag: If True, the verification circuit will be flagged. 
 
     Returns:
         QuantumCircuit combining the state preparation and verification circuit.
@@ -315,7 +304,6 @@ def _verification_circuit(
     """Build a verification circuit for a non-CSS state preparation circuit."""
     
     logger.info("Finding verification stabilizers for the state preparation circuit.")
-    print("Finding verification stabilizers for the state preparation circuit.")
 
     sp_circ.compute_fault_set()
     
@@ -327,7 +315,7 @@ def _verification_circuit(
 
     measurements = [measurement for layer in layers for measurement in layer]
 
-    print(stabs_symplectic_to_str(measurements))
+    logger.info(f"Found verification stabilizers: {stabs_symplectic_to_str(measurements)}")
 
     return _measure_non_css_stabs(
         sp_circ,
@@ -342,45 +330,47 @@ def _measure_ft_pauli(
     cbit: ClassicalRegister,
     flag: bool = False,
 ) -> None:
-    """Measure one non-CSS stabilizer with a flagged Pauli measurement."""
+    """Measure one non-CSS stabilizer with a flagged Pauli measurement.
+    
+    In the non-CSS case, stabilizers can contain any Pauli element, X, Y or Z.
+    To do the measurement, we convert X and Y into the Z basis.
+    """
+    n = stab.shape[0] // 2
+    x = stab[:n]
+    z = stab[n:]
+
+    support = []
+    for q in range(n):
+        if x[q] == 0 and z[q] == 0:
+            continue
+
+        support.append(q)
+
+        # Basis change to map the local Pauli to Z
+        if x[q] == 1 and z[q] == 0:      # X
+            qc.h(q)
+        elif x[q] == 0 and z[q] == 1:    # Z
+            pass
+        elif x[q] == 1 and z[q] == 1:    # Y
+            qc.sdg(q)
+            qc.h(q)
+
     if flag:
-        measure_one_flagged(qc, stab, anc[0], cbit[0])
+        measure_one_flagged(qc, support, anc[0], cbit[0])
     else:
-        n = stab.shape[0] // 2
-        x = stab[:n]
-        z = stab[n:]
-
-        support = []
-        for q in range(n):
-            if x[q] == 0 and z[q] == 0:
-                continue
-
-            support.append(q)
-
-            # Basis change to map the local Pauli to Z
-            if x[q] == 1 and z[q] == 0:      # X
-                qc.h(q)
-            elif x[q] == 0 and z[q] == 1:    # Z
-                pass
-            elif x[q] == 1 and z[q] == 1:    # Y
-                qc.sdg(q)
-                qc.h(q)
-
         # Measure Z-parity onto ancilla
         qc.reset(anc)
-        qc.h(anc)
         for q in support:
             qc.cx(q, anc)
-        qc.h(anc)
         qc.measure(anc, cbit)
 
-        # Undo basis change
-        for q in reversed(range(n)):
-            if x[q] == 1 and z[q] == 0:
-                qc.h(q)
-            elif x[q] == 1 and z[q] == 1:
-                qc.h(q)
-                qc.s(q)
+    # Undo basis change
+    for q in reversed(range(n)):
+        if x[q] == 1 and z[q] == 0:
+            qc.h(q)
+        elif x[q] == 1 and z[q] == 1:
+            qc.h(q)
+            qc.s(q)
 
 def _measure_non_css_stabs(
     sp_circ: NCSSFaultyStatePrepCircuit,

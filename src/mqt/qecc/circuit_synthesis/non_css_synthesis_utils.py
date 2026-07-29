@@ -12,8 +12,6 @@ import numpy as np
 import z3
 from qiskit.circuit import AncillaRegister, ClassicalRegister, QuantumCircuit
 
-from .synthesis_utils import measure_one_flagged
-
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable
 
@@ -43,40 +41,46 @@ def _flag_reset(qc: QuantumCircuit, flag: AncillaQubit, z_measurement: bool) -> 
     if z_measurement:
         qc.h(flag)
 
-def measure_one_flagged_pauli(
+def measure_one_flagged(
     qc: QuantumCircuit,
-    stab: npt.NDArray[np.int8],
+    stab_support: list[int],
     ancilla: AncillaQubit,
     measurement_bit: Clbit,
 ) -> None:
-    """Measure a general Pauli stabilizer using the existing 1-flagged Z-measurement gadget."""
-    n = len(stab) // 2
-    x = stab[:n]
-    z = stab[n:]
+    """Measure a 1-flagged stabilizer.
 
-    support: list[int] = []
+    The measurement is done in place.
 
-    for q in range(n):
-        if x[q] == 0 and z[q] == 0:
-            continue  # I
+    Args:
+        qc: The quantum circuit to add the measurement to.
+        stab_support: Support of the stabilizer to measure. 
+        ancilla: Ancilla qubit to use for the measurement.
+        measurement_bit: Classical bit to store the measurement result of the ancilla.
+    """
+    flag_reg = AncillaRegister(1)
+    meas_reg = ClassicalRegister(1)
+    qc.add_register(flag_reg)
+    qc.add_register(meas_reg)
+    flag = flag_reg[0]
+    flag_meas = meas_reg[0]
 
-        support.append(q)
+    qc.cx(stab_support[0], ancilla)
+    
+    qc.h(flag)
 
-        if x[q] == 1 and z[q] == 0:      # X -> Z
-            qc.h(q)
-        elif x[q] == 1 and z[q] == 1:    # Y -> Z
-            qc.sdg(q)
-            qc.h(q)
-        # Z: no change
+    qc.cx(flag, ancilla)
 
-    measure_one_flagged(qc, support, ancilla, measurement_bit, z_measurement=True)
+    for q in stab_support[1:-1]:
+        qc.cx(q, ancilla)
 
-    for q in reversed(range(n)):
-        if x[q] == 1 and z[q] == 0:      # X
-            qc.h(q)
-        elif x[q] == 1 and z[q] == 1:    # Y
-            qc.h(q)
-            qc.s(q)
+    qc.cx(flag, ancilla)
+
+    qc.h(flag)
+    qc.measure(flag, flag_meas)
+
+    qc.cx(stab_support[-1], ancilla)
+
+    qc.measure(ancilla, measurement_bit)
 
 def odd_overlap(v_sym: np.ndarray[np.bool_], v_con: np.ndarray[np.int8]) -> z3.BoolRef:
     """Return True if anticommutation is odd."""
