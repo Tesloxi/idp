@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import z3
 from ldpc.mod2.mod2_numpy import row_echelon
+from itertools import product
 
 from .synthesis_utils import symbolic_vector_add, symbolic_vector_eq, vars_to_stab
 
@@ -263,6 +264,8 @@ class FaultSet:
         qubit_faults = [{} for _ in range(num_qubits)] # For each qubit, store 
         # an array for each point in the circuit where an error could 
         # and remember an index for this spot
+
+        faults_on_two_qb_gates = [] # we treat differently the faults affecting the two qubit gates
         
         # Go through every gate to add propagation spots identified with the
         # index of the gate
@@ -388,6 +391,9 @@ class FaultSet:
                         new_error = qubit_faults[ctrl][next_spot_ctrl][error_name_ctrl] ^ qubit_faults[trgt][next_spot_trgt][error_name_trgt]
                         # print(f"New error for qubit {qb} after gate {i} and fault {f}: {new_error}")
                         qubit_faults[qb][i][f] = new_error
+
+                        # Add the single faults on the two-qubit gate
+                        faults_on_two_qb_gates.append(qubit_faults[ctrl][next_spot_ctrl][f] ^ qubit_faults[trgt][next_spot_trgt][f]) # i.e. X, Y or Z on the two-qubit gate directly
                     
             # print(" -----------------------------")
                     
@@ -400,8 +406,175 @@ class FaultSet:
                 for fault_name, propagated_error in faults.items():
                     if fault_name != "I":
                         a.append(list(propagated_error))
+        for f in faults_on_two_qb_gates:
+            a.append(f)
         fs = cls.from_fault_array(np.array(a, dtype=np.int8)) 
-        return fs       
+        return fs    
+
+    @staticmethod
+    def _gf2_rank(matrix: np.ndarray[np.int8]) -> int:
+        """Return the GF(2) rank of a binary matrix."""
+        matrix = np.array(matrix, dtype=np.int8, copy=True) % 2
+        rows, cols = matrix.shape
+        rank = 0
+
+        for col in range(cols):
+            pivot = None
+            for row in range(rank, rows):
+                if matrix[row, col]:
+                    pivot = row
+                    break
+
+            if pivot is None:
+                continue
+
+            if pivot != rank:
+                matrix[[rank, pivot]] = matrix[[pivot, rank]]
+
+            for row in range(rows):
+                if row != rank and matrix[row, col]:
+                    matrix[row] ^= matrix[rank]
+
+            rank += 1
+            if rank == rows:
+                break
+
+        return rank
+
+    @staticmethod
+    def _is_in_stabilizer_span(
+        error: np.ndarray[np.int8],
+        stabs: np.ndarray[np.int8],
+    ) -> bool:
+        """Check whether a binary error vector lies in the stabilizer span."""
+        if stabs.size == 0:
+            return np.array_equal(error, np.zeros_like(error))
+
+        if stabs.ndim == 1:
+            stabs = stabs.reshape(1, -1)
+
+        augmented = np.vstack([stabs, error])
+        return FaultSet._gf2_rank(augmented) == FaultSet._gf2_rank(stabs)
+
+    @staticmethod
+    def _pauli_to_symplectic(
+        num_qubits: int,
+        qubits: list[int],
+        pauli: str,
+    ) -> np.ndarray[np.int8]:
+        """Convert a Pauli label on one or two qubits into a symplectic vector."""
+        error = np.zeros(2 * num_qubits, dtype=np.int8)
+
+        for qubit in qubits:
+            if pauli == "X":
+                error[qubit] = 1
+            elif pauli == "Z":
+                error[num_qubits + qubit] = 1
+            elif pauli == "Y":
+                error[qubit] = 1
+                error[num_qubits + qubit] = 1
+            elif pauli != "I":
+                raise ValueError(f"Unsupported Pauli label: {pauli}")
+
+        return error
+
+    def check_single_fault_completeness(
+            self,
+            circ: Circuit,
+            stabs: np.ndarray[np.int8] | None = None,
+    ) -> None:
+        """Brute-force all single-fault locations and verify completeness of the fault set.
+
+        For each circuit location, every non-identity Pauli fault is propagated through
+        the remainder of the circuit. The propagated error must either:
+        - already be present in this FaultSet, or
+        - be stabilizer-equivalent to a weight-0/1 Pauli.
+        """
+        if stabs.shape[1] != 2*self.num_qubits:
+            raise ValueError(
+                f"Stabilizers must have {2*self.num_qubits} columnes, got {stabs.shape[1]}."
+            )
+
+        # Build the list of weight-0/1 candidate errors
+        weight_leq_1_candidates = [np.zeros(2*self.num_qubits, dtype=np.int8)]
+        for qubit in range(self.num_qubits):
+            x_err = np.zeros(2*self.num_qubits, dtype=np.int8)
+            x_err[qubit] = 1
+
+            z_err = np.zeros(2 * self.num_qubits, dtype=np.int8)
+            z_err[self.num_qubits + qubit] = 1
+
+            y_err = np.zeros(2 * self.num_qubits, dtype=np.int8)
+            y_err[qubit] = 1
+            y_err[self.num_qubits + qubit] = 1
+
+            weight_leq_1_candidates.extend([x_err, z_err, y_err])
+
+        for gate_idx, gate in enumerate(circ.gates):
+            n_qubits = gate.num_qubits()
+
+            if n_qubits == 1:
+                qubit = gate.qubits[0]
+                for pauli in ("X", "Y", "Z"):
+                    fault = self._pauli_to_symplectic(self.num_qubits, [qubit], pauli)
+                    propagated = fault.copy()
+
+                    for later_gate in circ.gates[gate_idx:]:
+                        propagated = self.forward_propagate(later_gate, propagated)
+
+                    if self._is_present(propagated):
+                        continue
+
+                    if any(
+                        self._is_in_stabilizer_span(propagated^cand, stabs)
+                        for cand in weight_leq_1_candidates
+                    ): continue
+
+                    raise AssertionError(
+                        f"Single-fault completeness check failed at gate {gate_idx} "
+                        f"({gate.name} on qubits {gate.qubits}) for fault {pauli}: "
+                        f"propagated error {propagated} is neither in the fault set "
+                        f"nor stabilizer-equivalent to weight <= 1."
+                    )
+
+            elif n_qubits == 2:
+                q0, q1 = gate.qubits
+                for pauli in ("X", "Y", "Z"):
+
+                    fault = self._pauli_to_symplectic(
+                        self.num_qubits,
+                        [q0, q1],
+                        pauli
+                    )
+                    propagated = fault.copy()
+
+                    for later_gate in circ.gates[gate_idx+1:]:
+                        
+                        propagated = self.forward_propagate(later_gate, propagated)
+
+                    if self._is_present(propagated):
+                        continue
+
+                    if any(
+                        self._is_in_stabilizer_span(propagated^cand, stabs)
+                        for cand in weight_leq_1_candidates
+                    ): continue
+
+                    raise AssertionError(
+                        f"Single-fault completeness check failed at gate {gate_idx} "
+                        f"({gate.name} on qubits {gate.qubits}) for fault {pauli}: "
+                        f"propagated error {propagated} is neither in the fault set "
+                        f"nor stabilizer-equivalent to weight <= 1."
+                    )
+            else:
+                raise NotImplementedError(
+                    f"Unsupported gate arity {n_qubits} in completeness check."
+                )
+
+    def _is_present(self, error: np.ndarray[np.int8]) -> bool:
+        """Check whether an error is exactly present in this FaultSet."""
+        return bool(np.any(np.all(self.faults == error, axis=1)))
+                            
     
     def normalize(self, stabs: np.ndarray[np.int8]) -> None:
         """Normalize the faults with respect to a stabilizer group.
@@ -556,6 +729,8 @@ class FaultSet:
 
     def __iter__(self) -> Iterator[np.ndarray[np.int8]]:
         return iter(self.faults)
+
+    
 
 def coset_leader(fault: np.ndarray[np.int8], generators: np.ndarray[np.int8]) -> np.ndarray[np.int8]:
     """Compute the coset leader of a fault given a set of stabilizer generators

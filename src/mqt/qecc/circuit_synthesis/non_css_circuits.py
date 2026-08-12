@@ -8,6 +8,7 @@ import stim
 from qiskit import QuantumCircuit, synthesis, compiler
 
 from mqt.qecc.circuit_synthesis.circuit_utils import compose_circuits
+from mqt.qecc.circuit_synthesis.circuits import CNOTCircuit
 
 
 BASIS_GATES = {"cx", "cz", "h", "s", "sdg", "sx", "sxdg", "x", "y", "z"}
@@ -57,6 +58,15 @@ class Gate:
                              [0, 1, 0, 0],
                              [0, 0, 1, 0],
                              [0, 0, 0, -1]])
+        elif self.name == "x":
+            return np.array([[0, 1],
+                             [1, 0]])
+        elif self.name == "y":
+            return 1j*np.array([[0, -1],
+                                [1, 0]])
+        elif self.name == "z":
+            return np.array([[1, 0],
+                             [0, -1]])
         elif self.name == "h":
             return np.array([[1, 1],
                             [1, -1]])/np.sqrt(2)
@@ -72,6 +82,9 @@ class Gate:
         elif self.name == "sxdg":
             return np.array([[0.5 - 0.5j, 0.5 + 0.5j],
                             [0.5 + 0.5j, 0.5 - 0.5j]])
+        else:
+            msg = f"Gate {self.name} is not supported."
+            raise ValueError(msg)
 
 class Circuit:
     """Represents a restricted quantum circuit composed of CNOT, H and S gates"""
@@ -137,6 +150,16 @@ class Circuit:
                 qiskit_circuit.z(gate.qubits[0])
 
         return qiskit_circuit
+
+    @classmethod
+    def from_gate_list(cls, gates: list[Gate]) -> Circuit:
+        """Construct a circuit from a list of Gate objects."""
+        c = cls()
+
+        for gate in gates:
+            c.add_gate(gate)
+
+        return c
     
     @classmethod
     def from_qiskit_circuit(cls, qiskit_circuit: QuantumCircuit) -> Circuit:
@@ -178,7 +201,23 @@ class Circuit:
                 for i in range(0, len(t), 2):
                     circ.add_gate(Gate(gate.name, [t[i].qubit_value, t[i+1].qubit_value]))
         return circ
-    
+
+    @classmethod
+    def from_qasm(cls, qasm_file: str) -> Circuit:
+        """Load a .qasm file and convert it to a Circuit.
+
+        Args:
+            qasm_file: Path to the .qasm file.
+
+        Returns:
+            A Circuit representation of the QASM circuit.
+        """
+        with open(qasm_file, encoding="utf-8") as f:
+            qasm_str = f.read()
+
+        qiskit_circuit = QuantumCircuit.from_qasm_str(qasm_str)
+        return cls.from_qiskit_circuit(qiskit_circuit)
+
     def num_qubits(self) -> int:
         """Return the number of qubits used in the circuit.
         
@@ -265,6 +304,20 @@ class Circuit:
         symplectic_stabs = np.array([stim_PauliString_to_symplectic(stab) for stab in stabs], dtype=np.int8)
 
         return symplectic_stabs
+
+    @classmethod
+    def from_css_circuit(cls, cnot_circuit: CNOTCircuit) -> Circuit:
+        """Convert a CNOTCircuit object to a Circuit object."""
+        gates = []
+        for idx, basis in cnot_circuit.initializations.items():
+            if basis == 'X':
+                gates.append(Gate("H", [idx]))
+        gates += [Gate("CX", qubits) for qubits in cnot_circuit.cnots]
+        c = Circuit.from_gate_list(gates)
+        return c
+
+
+    
 
 def compose_circuit(circ1: Circuit, circ2: Circuit, wiring: dict[int, int] | None = None) -> tuple[Circuit, dict[int, int], dict[int, int]]:
     """Compose two circuits.
